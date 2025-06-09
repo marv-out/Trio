@@ -291,96 +291,116 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
 
     /// Pushes an update to the live activity with the specified content state.
     ///
-    /// If an existing activity requires recreation or is outdated, this method ends it and starts a new one.
-    /// Otherwise, it updates the current live activity.
+    /// This method follows Apple's guidelines for Live Activities:
+    /// 1. Only creates new activities in the foreground
+    /// 2. Updates existing active activities
+    /// 3. Properly handles stale and dismissed activities
     ///
     /// - Parameter state: The new content state to push to the live activity.
     @MainActor private func pushUpdate(_ state: LiveActivityAttributes.ContentState) async {
-        // End all unknown activities except the current one
-        for unknownActivity in Activity<LiveActivityAttributes>.activities
-            .filter({ self.currentActivity?.activity.id != $0.id })
-        {
-            await unknownActivity.end(nil, dismissalPolicy: .immediate)
-        }
+        let isInBackground = UIApplication.shared.applicationState == .background
+        let existingActivities = Activity<LiveActivityAttributes>.activities
 
-        // Defensive: capture the current activity at function start
-        let activityAtStart = currentActivity
-
-        if let currentActivity = activityAtStart {
-            if currentActivity.needsRecreation(), UIApplication.shared.applicationState == .active {
-                debug(.default, "[LiveActivityManager] Ending current activity for recreation: \(currentActivity.activity.id)")
-                await endActivity()
-                // After endActivity(), currentActivity is guaranteed to be nil
-                // No recursive task, but explicitly restart
-                if self.currentActivity == nil {
-                    debug(.default, "[LiveActivityManager] Re-pushing update after recreation.")
-                    await pushUpdate(state)
-                } else {
-                    debug(.default, "[LiveActivityManager] Warning: currentActivity was not nil after endActivity!")
-                }
-                return
-            } else {
+        // First, try to update the current activity if we have one
+        if let currentActivity = currentActivity {
+            switch currentActivity.activity.activityState {
+            case .active:
+                // Activity is active, update it
                 let content = ActivityContent(
                     state: state,
-                    staleDate: min(state.date ?? Date.now, Date.now).addingTimeInterval(360)
+                    staleDate: Date.now.addingTimeInterval(360)
                 )
-                // Before the update, check if currentActivity is still valid
-                if let stillCurrent = self.currentActivity, stillCurrent.activity.id == currentActivity.activity.id {
-                    debug(.default, "[LiveActivityManager] Updating current activity: \(stillCurrent.activity.id)")
-                    await stillCurrent.activity.update(content)
-                } else {
-                    debug(.default, "[LiveActivityManager] Skipped update: currentActivity changed during pushUpdate.")
-                }
-            }
-        } else {
-            // ... Activity is newly created ...
-            do {
-                let expired = ActivityContent(
-                    state: LiveActivityAttributes
-                        .ContentState(
-                            unit: settings.units.rawValue,
-                            bg: "--",
-                            direction: nil,
-                            change: "--",
-                            date: Date.now,
-                            highGlucose: settings.high,
-                            lowGlucose: settings.low,
-                            target: determination?.target ?? 100 as Decimal,
-                            glucoseColorScheme: settings.glucoseColorScheme.rawValue,
-                            detailedViewState: nil,
-                            isInitialState: true
-                        ),
-                    staleDate: Date.now.addingTimeInterval(60)
-                )
+                debug(.default, "[LiveActivityManager] Updating active activity: \(currentActivity.activity.id)")
+                await currentActivity.activity.update(content)
 
-                let activity = try Activity.request(
-                    attributes: LiveActivityAttributes(startDate: Date.now),
-                    content: expired,
-                    pushType: nil
-                )
-                currentActivity = ActiveActivity(activity: activity, startDate: Date.now)
-                debug(.default, "[LiveActivityManager] Created new activity: \(activity.id)")
-
-                // Update the newly created activity with actual data
-                let updateContent = ActivityContent(
-                    state: state,
-                    staleDate: Date.now.addingTimeInterval(5 * 60)
-                )
-                await activity.update(updateContent)
-                debug(.default, "[LiveActivityManager] Updated new activity with actual data")
-            } catch {
+            case .dismissed,
+                 .ended,
+                 .stale:
+                // Activity is no longer valid
                 debug(
                     .default,
-                    "\(#file): Error creating new activity: \(error)"
+                    "[LiveActivityManager] Activity invalid (\(currentActivity.activity.activityState)): \(currentActivity.activity.id)"
                 )
-                // Reset currentActivity on error to allow retry on next update
-                currentActivity = nil
+                await currentActivity.activity.end(nil, dismissalPolicy: .immediate)
+                self.currentActivity = nil
+
+                // Only try to find/create new activity if we're in foreground
+                if !isInBackground {
+                    // Look for another active activity first
+                    if let existingActive = existingActivities.first(where: { $0.activityState == .active }) {
+                        self.currentActivity = ActiveActivity(activity: existingActive, startDate: Date.now)
+                        debug(.default, "[LiveActivityManager] Switched to existing activity: \(existingActive.id)")
+                        let content = ActivityContent(
+                            state: state,
+                            staleDate: Date.now.addingTimeInterval(360)
+                        )
+                        await existingActive.update(content)
+                    } else {
+                        // Create new activity if none found
+                        await createNewActivity(with: state)
+                    }
+                }
+
+            @unknown default:
+                debug(.default, "[LiveActivityManager] Unknown activity state: \(currentActivity.activity.id)")
+                self.currentActivity = nil
+            }
+        } else if !isInBackground {
+            // No current activity and we're in foreground
+            // First try to find an existing active activity
+            if let existingActive = existingActivities.first(where: { $0.activityState == .active }) {
+                currentActivity = ActiveActivity(activity: existingActive, startDate: Date.now)
+                debug(.default, "[LiveActivityManager] Reconnected to existing activity: \(existingActive.id)")
+                let content = ActivityContent(
+                    state: state,
+                    staleDate: Date.now.addingTimeInterval(360)
+                )
+                await existingActive.update(content)
+            } else {
+                // Create new activity if none found
+                await createNewActivity(with: state)
+            }
+        } else {
+            debug(.default, "[LiveActivityManager] No active activity and in background - skipping update")
+        }
+
+        // Clean up any stale/dismissed/ended activities
+        // But don't clean up our current activity
+        for activity in existingActivities where activity.id != currentActivity?.activity.id {
+            if activity.activityState != .active {
+                debug(.default, "[LiveActivityManager] Cleaning up inactive activity: \(activity.id)")
+                await activity.end(nil, dismissalPolicy: .immediate)
             }
         }
     }
 
+    /// Creates a new live activity with the given state.
+    /// This should only be called when the app is in the foreground.
+    ///
+    /// - Parameter state: The content state for the new activity.
+    @MainActor private func createNewActivity(with state: LiveActivityAttributes.ContentState) async {
+        do {
+            // Create initial content with a short stale date
+            let content = ActivityContent(
+                state: state,
+                staleDate: Date.now.addingTimeInterval(5 * 60)
+            )
+
+            let activity = try Activity.request(
+                attributes: LiveActivityAttributes(startDate: Date.now),
+                content: content,
+                pushType: nil
+            )
+            currentActivity = ActiveActivity(activity: activity, startDate: Date.now)
+            debug(.default, "[LiveActivityManager] Created new activity: \(activity.id)")
+        } catch {
+            debug(.default, "\(#file): Error creating new activity: \(error)")
+            currentActivity = nil
+        }
+    }
+
     /// Ends the current live activity and ensures that all unknown activities are terminated.
-    private func endActivity() async {
+    @MainActor private func endActivity() async {
         debug(.default, "Ending all live activities...")
 
         if let currentActivity {
@@ -389,28 +409,24 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
             self.currentActivity = nil
         }
 
+        // Clean up any remaining activities
         for activity in Activity<LiveActivityAttributes>.activities {
-            debug(.default, "Ending lingering activity: \(activity.id)")
+            debug(.default, "Ending activity: \(activity.id)")
             await activity.end(nil, dismissalPolicy: .immediate)
-        }
-
-        for unknownActivity in Activity<LiveActivityAttributes>.activities {
-            debug(.default, "Ending unknown activity: \(unknownActivity.id)")
-            await unknownActivity.end(nil, dismissalPolicy: .immediate)
         }
 
         debug(.default, "All live activities ended.")
     }
 
-    /// Restarts the live activity from a Live Activity Intent.
+    /// Updates or restarts the live activity from a Live Activity Intent.
     ///
-    /// This method mimics xdrip's `restartActivityFromLiveActivityIntent()` behavior by verifying that a valid content state exists,
-    /// ending the current live activity, and starting a new one using the current state.
+    /// This method updates the current live activity if it exists and is active,
+    /// or creates a new one if needed, ensuring continuous display without interruption.
     @MainActor func restartActivityFromLiveActivityIntent() async {
         guard let latestGlucose = latestGlucose,
               let determination = determination
         else {
-            debug(.default, "Cannot restart live activity because required persistent state is not available. Fetching data...")
+            debug(.default, "Cannot update live activity because required persistent state is not available.")
             return
         }
 
@@ -424,27 +440,41 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
             override: override,
             widgetItems: widgetItems
         ) else {
-            debug(.default, "Cannot restart live activity because content state cannot be created")
+            debug(.default, "Cannot update live activity because content state cannot be created")
             return
         }
 
+        let existingActivities = Activity<LiveActivityAttributes>.activities
+
+        // First try to update current activity if it's active
+        if let current = currentActivity, current.activity.activityState == .active {
+            debug(.default, "Updating current activity from shortcut: \(current.activity.id)")
+            let content = ActivityContent(
+                state: contentState,
+                staleDate: Date.now.addingTimeInterval(360)
+            )
+            await current.activity.update(content)
+            return
+        }
+
+        // If no current active activity, look for any active one
+        if let existingActive = existingActivities.first(where: { $0.activityState == .active }) {
+            debug(.default, "Reconnecting to existing activity from shortcut: \(existingActive.id)")
+            currentActivity = ActiveActivity(activity: existingActive, startDate: Date.now)
+            let content = ActivityContent(
+                state: contentState,
+                staleDate: Date.now.addingTimeInterval(360)
+            )
+            await existingActive.update(content)
+            return
+        }
+
+        // If no active activities found, clean up and create new one
+        debug(.default, "No active activities found, creating new one from shortcut")
         await endActivity()
+        await createNewActivity(with: contentState)
 
-        while (currentActivity != nil && currentActivity!.activity.activityState != .ended) || Activity<LiveActivityAttributes>
-            .activities.contains(where: { $0.activityState != .ended })
-        {
-            debug(.default, "Waiting for Live Activity to end...")
-            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2s sleep
-        }
-
-        // Add additional delay to ensure iOS has fully cleaned up the previous activity
-        debug(.default, "Waiting additional time for iOS to clean up...")
-        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s additional delay
-
-        Task { @MainActor in
-            await self.pushUpdate(contentState)
-        }
-        debug(.default, "Restarted Live Activity from LiveActivityIntent (via iOS Shortcut)")
+        debug(.default, "Live Activity updated from LiveActivityIntent (via iOS Shortcut)")
     }
 }
 
