@@ -308,7 +308,7 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
                 // Activity is active, update it
                 let content = ActivityContent(
                     state: state,
-                    staleDate: Date.now.addingTimeInterval(360)
+                    staleDate: min(state.date ?? Date.now, Date.now).addingTimeInterval(360)
                 )
                 debug(.default, "[LiveActivityManager] Updating active activity: \(currentActivity.activity.id)")
                 await currentActivity.activity.update(content)
@@ -327,14 +327,14 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
                 // Only try to find/create new activity if we're in foreground
                 if !isInBackground {
                     // Look for another active activity first
-                    if let existingActive = existingActivities.first(where: { $0.activityState == .active }) {
-                        self.currentActivity = ActiveActivity(activity: existingActive, startDate: Date.now)
-                        debug(.default, "[LiveActivityManager] Switched to existing activity: \(existingActive.id)")
+                    if let existingActivity = existingActivities.first(where: { $0.activityState == .active }) {
+                        self.currentActivity = ActiveActivity(activity: existingActivity, startDate: Date.now)
+                        debug(.default, "[LiveActivityManager] Switched to existing activity: \(existingActivity.id)")
                         let content = ActivityContent(
                             state: state,
                             staleDate: Date.now.addingTimeInterval(360)
                         )
-                        await existingActive.update(content)
+                        await existingActivity.update(content)
                     } else {
                         // Create new activity if none found
                         await createNewActivity(with: state)
@@ -353,7 +353,7 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
                 debug(.default, "[LiveActivityManager] Reconnected to existing activity: \(existingActive.id)")
                 let content = ActivityContent(
                     state: state,
-                    staleDate: Date.now.addingTimeInterval(360)
+                    staleDate: Date.now.addingTimeInterval(300)
                 )
                 await existingActive.update(content)
             } else {
