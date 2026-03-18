@@ -128,7 +128,6 @@ extension Home {
 
         let taskContext = CoreDataStack.shared.newTaskContext()
         let tddFetchContext = CoreDataStack.shared.newTaskContext()
-        let tempTargetFetchContext = CoreDataStack.shared.newTaskContext()
         let batteryFetchContext = CoreDataStack.shared.newTaskContext()
         let viewContext = CoreDataStack.shared.persistentContainer.viewContext
 
@@ -292,6 +291,40 @@ extension Home {
             return controller
         }()
 
+        @ObservationIgnored let tempTargetControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var tempTargetController: NSFetchedResultsController<TempTargetStored> = {
+            let request = NSFetchRequest<TempTargetStored>(entityName: "TempTargetStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \TempTargetStored.date, ascending: false)]
+            request.predicate = NSPredicate.tempTargetsForMainChart
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = tempTargetControllerDelegate
+            return controller
+        }()
+
+        @ObservationIgnored let tempTargetRunControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var tempTargetRunController: NSFetchedResultsController<TempTargetRunStored> = {
+            let request = NSFetchRequest<TempTargetRunStored>(entityName: "TempTargetRunStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \TempTargetRunStored.startDate, ascending: false)]
+            request.predicate = NSPredicate(format: "startDate >= %@", Date.oneDayAgo as NSDate)
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = tempTargetRunControllerDelegate
+            return controller
+        }()
+
         // Queue for handling Core Data change notifications
         private let queue = DispatchQueue(label: "HomeStateModel.queue", qos: .userInitiated)
         private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
@@ -335,6 +368,8 @@ extension Home {
                 await self.setupLastBolusController()
                 await self.setupOverrideController()
                 await self.setupOverrideRunController()
+                await self.setupTempTargetController()
+                await self.setupTempTargetRunController()
 
                 // The rest can be initialized concurrently
                 await withTaskGroup(of: Void.self) { group in
@@ -352,12 +387,6 @@ extension Home {
                     }
                     group.addTask {
                         self.setupReservoir()
-                    }
-                    group.addTask {
-                        self.setupTempTargetsStored()
-                    }
-                    group.addTask {
-                        self.setupTempTargetsRunStored()
                     }
                     group.addTask {
                         self.iobService.updateIOB()
@@ -386,16 +415,6 @@ extension Home {
             coreDataPublisher?.filteredByEntityName("OpenAPS_Battery").sink { [weak self] _ in
                 guard let self = self else { return }
                 self.setupBatteryArray()
-            }.store(in: &subscriptions)
-
-            coreDataPublisher?.filteredByEntityName("TempTargetStored").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupTempTargetsStored()
-            }.store(in: &subscriptions)
-
-            coreDataPublisher?.filteredByEntityName("TempTargetRunStored").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupTempTargetsRunStored()
             }.store(in: &subscriptions)
         }
 
