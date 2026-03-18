@@ -128,7 +128,6 @@ extension Home {
 
         let taskContext = CoreDataStack.shared.newTaskContext()
         let tddFetchContext = CoreDataStack.shared.newTaskContext()
-        let batteryFetchContext = CoreDataStack.shared.newTaskContext()
         let viewContext = CoreDataStack.shared.persistentContainer.viewContext
 
         @ObservationIgnored let glucoseControllerDelegate = FetchedResultsControllerDelegate()
@@ -325,6 +324,23 @@ extension Home {
             return controller
         }()
 
+        @ObservationIgnored let batteryControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var batteryController: NSFetchedResultsController<OpenAPS_Battery> = {
+            let request = NSFetchRequest<OpenAPS_Battery>(entityName: "OpenAPS_Battery")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \OpenAPS_Battery.date, ascending: false)]
+            request.predicate = NSPredicate.predicateFor30MinAgo
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = batteryControllerDelegate
+            return controller
+        }()
+
         // Queue for handling Core Data change notifications
         private let queue = DispatchQueue(label: "HomeStateModel.queue", qos: .userInitiated)
         private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
@@ -370,14 +386,12 @@ extension Home {
                 await self.setupOverrideRunController()
                 await self.setupTempTargetController()
                 await self.setupTempTargetRunController()
+                await self.setupBatteryController()
 
                 // The rest can be initialized concurrently
                 await withTaskGroup(of: Void.self) { group in
                     group.addTask {
                         self.setupTDDArray()
-                    }
-                    group.addTask {
-                        self.setupBatteryArray()
                     }
                     group.addTask {
                         await self.setupBasalProfile()
@@ -410,11 +424,6 @@ extension Home {
             coreDataPublisher?.filteredByEntityName("TDDStored").sink { [weak self] _ in
                 guard let self = self else { return }
                 self.setupTDDArray()
-            }.store(in: &subscriptions)
-
-            coreDataPublisher?.filteredByEntityName("OpenAPS_Battery").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupBatteryArray()
             }.store(in: &subscriptions)
         }
 
