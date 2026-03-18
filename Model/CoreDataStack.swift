@@ -121,7 +121,7 @@ class CoreDataStack: ObservableObject {
     private func fetchPersistentHistoryTransactionsAndChanges() async throws {
         let taskContext = newTaskContext()
         taskContext.name = "persistentHistoryContext"
-        debug(.coreData, "Start fetching persistent history changes from the store ... \(DebuggingIdentifiers.inProgress)")
+//        debug(.coreData, "Start fetching persistent history changes from the store ... \(DebuggingIdentifiers.inProgress)")
 
         try await taskContext.perform {
             // Execute the persistent history change since the last transaction
@@ -136,7 +136,7 @@ class CoreDataStack: ObservableObject {
     }
 
     private func mergePersistentHistoryChanges(from history: [NSPersistentHistoryTransaction]) {
-        debug(.coreData, "Received \(history.count) persistent history transactions \(history.description)")
+//        debug(.coreData, "Received \(history.count) persistent history transactions")
         // Update view context with objectIDs from history change request
         /// - Tag: mergeChanges
         let viewContext = persistentContainer.viewContext
@@ -144,7 +144,6 @@ class CoreDataStack: ObservableObject {
             for transaction in history {
                 viewContext.mergeChanges(fromContextDidSave: transaction.objectIDNotification())
                 self.lastToken = transaction.token
-                debug(.coreData, "\(DebuggingIdentifiers.succeeded) merging completed")
             }
         }
     }
