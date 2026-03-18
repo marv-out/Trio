@@ -187,6 +187,7 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
 
         guard context.hasChanges else { return }
         try context.save()
+        debug(.coreData, "\(DebuggingIdentifiers.succeeded) saving glucose completed")
     }
 
     private func storeGlucoseBatch(_ glucose: [BloodGlucose]) throws {

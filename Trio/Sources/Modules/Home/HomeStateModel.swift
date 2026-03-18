@@ -127,7 +127,6 @@ extension Home {
         var maxValueIobChart: Decimal = 5
 
         let taskContext = CoreDataStack.shared.newTaskContext()
-        let glucoseFetchContext = CoreDataStack.shared.newTaskContext()
         let carbsFetchContext = CoreDataStack.shared.newTaskContext()
         let fpuFetchContext = CoreDataStack.shared.newTaskContext()
         let determinationFetchContext = CoreDataStack.shared.newTaskContext()
@@ -137,6 +136,24 @@ extension Home {
         let tempTargetFetchContext = CoreDataStack.shared.newTaskContext()
         let batteryFetchContext = CoreDataStack.shared.newTaskContext()
         let viewContext = CoreDataStack.shared.persistentContainer.viewContext
+
+        @ObservationIgnored let glucoseControllerDelegate = GlucoseFetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var glucoseController: NSFetchedResultsController<GlucoseStored> = {
+            let request = NSFetchRequest<GlucoseStored>(entityName: "GlucoseStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \GlucoseStored.date, ascending: true)]
+            request.predicate = NSPredicate.glucose
+            request.fetchBatchSize = 50
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = glucoseControllerDelegate
+            return controller
+        }()
 
         // Queue for handling Core Data change notifications
         private let queue = DispatchQueue(label: "HomeStateModel.queue", qos: .userInitiated)
@@ -171,11 +188,11 @@ extension Home {
                 await self.setupCGMSettings()
                 self.registerObservers()
 
+                // Set up NSFetchedResultsController for glucose (requires MainActor for viewContext)
+                await self.setupGlucoseController()
+
                 // The rest can be initialized concurrently
                 await withTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        self.setupGlucoseArray()
-                    }
                     group.addTask {
                         self.setupCarbsArray()
                     }
@@ -235,14 +252,6 @@ extension Home {
                 }
                 .store(in: &subscriptions)
 
-            glucoseStorage.updatePublisher
-                .receive(on: queue)
-                .sink { [weak self] _ in
-                    guard let self = self else { return }
-                    self.setupGlucoseArray()
-                }
-                .store(in: &subscriptions)
-
             carbsStorage.updatePublisher
                 .receive(on: queue)
                 .sink { [weak self] _ in
@@ -261,11 +270,6 @@ extension Home {
             coreDataPublisher?.filteredByEntityName("TDDStored").sink { [weak self] _ in
                 guard let self = self else { return }
                 self.setupTDDArray()
-            }.store(in: &subscriptions)
-
-            coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupGlucoseArray()
             }.store(in: &subscriptions)
 
             coreDataPublisher?.filteredByEntityName("CarbEntryStored").sink { [weak self] _ in
@@ -745,5 +749,15 @@ extension Home.StateModel: PumpManagerOnboardingDelegate {
 
     func pumpManagerOnboarding(didPauseOnboarding _: PumpManagerUI) {
         // nothing to do
+    }
+}
+
+// MARK: - NSFetchedResultsController Delegate
+
+final class GlucoseFetchedResultsControllerDelegate: NSObject, NSFetchedResultsControllerDelegate {
+    var onContentChange: (() -> Void)?
+
+    func controllerDidChangeContent(_: NSFetchedResultsController<any NSFetchRequestResult>) {
+        onContentChange?()
     }
 }

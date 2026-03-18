@@ -1,58 +1,6 @@
 import Foundation
 
 extension Home.StateModel {
-    func yAxisChartData(glucoseValues: [GlucoseStored]) {
-        // Capture the forecast values from `preprocessedData` on the main thread
-        Task { @MainActor in
-            let forecastValues = self.preprocessedData.map { Decimal($0.forecastValue.value) }
-
-            // Perform the glucose processing on the background context
-            glucoseFetchContext.perform {
-                let glucoseMapped = glucoseValues.map { Decimal($0.glucose) }
-
-                // Calculate min and max values for glucose and forecast
-                let minGlucose = glucoseMapped.min()
-                let maxGlucose = glucoseMapped.max()
-                let minForecast = forecastValues.min()
-                let maxForecast = forecastValues.max()
-
-                // Ensure all values exist, otherwise set default values
-                guard let minGlucose = minGlucose, let maxGlucose = maxGlucose else {
-                    Task {
-                        await self.updateChartBounds(minValue: 39, maxValue: 200)
-                    }
-                    return
-                }
-
-                // Adjust max forecast to be no more than 50 over max glucose
-                let adjustedMaxForecast = min(maxForecast ?? maxGlucose + 50, maxGlucose + 50)
-                let minOverall = min(minGlucose, minForecast ?? minGlucose)
-                let maxOverall = max(maxGlucose, adjustedMaxForecast)
-
-                var maxYValue = Decimal(200)
-                if maxOverall > 200, maxOverall <= 225 {
-                    maxYValue = Decimal(250)
-                } else if maxOverall > 225, maxOverall <= 275 {
-                    maxYValue = Decimal(300)
-                } else if maxOverall > 275, maxOverall <= 325 {
-                    maxYValue = Decimal(350)
-                } else if maxOverall > 325 {
-                    maxYValue = Decimal(400)
-                }
-
-                // Update the chart bounds on the main thread
-                Task {
-                    await self.updateChartBounds(minValue: minOverall, maxValue: maxYValue)
-                }
-            }
-        }
-    }
-
-    @MainActor private func updateChartBounds(minValue: Decimal, maxValue: Decimal) async {
-        minYAxisValue = minValue
-        maxYAxisValue = maxValue
-    }
-
     func yAxisChartDataCobChart(determinations: [[String: Any]]) {
         determinationFetchContext.perform {
             // Map the COB values from the dictionary results
