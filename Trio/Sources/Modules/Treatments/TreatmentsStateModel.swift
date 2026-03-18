@@ -122,8 +122,25 @@ extension Treatments {
         let now = Date.now
 
         let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-        let glucoseFetchContext = CoreDataStack.shared.newTaskContext()
         let determinationFetchContext = CoreDataStack.shared.newTaskContext()
+
+        @ObservationIgnored let glucoseControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var glucoseController: NSFetchedResultsController<GlucoseStored> = {
+            let request = NSFetchRequest<GlucoseStored>(entityName: "GlucoseStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \GlucoseStored.date, ascending: false)]
+            request.predicate = NSPredicate.glucose
+            request.fetchBatchSize = 50
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = glucoseControllerDelegate
+            return controller
+        }()
 
         var isActive: Bool = false
 
@@ -157,7 +174,6 @@ extension Treatments {
                     .share()
                     .eraseToAnyPublisher()
             registerHandlers()
-            registerSubscribers()
             setupBolusStateConcurrently()
             subscribeToBolusProgress()
         }
@@ -184,11 +200,11 @@ extension Treatments {
         private func setupBolusStateConcurrently() {
             debug(.bolusState, "Setting up bolus state concurrently...")
             Task {
+                // Set up NSFetchedResultsController (requires MainActor for viewContext)
+                await self.setupGlucoseController()
+
                 do {
                     try await withThrowingTaskGroup(of: Void.self) { group in
-                        group.addTask {
-                            self.setupGlucoseArray()
-                        }
                         group.addTask {
                             self.setupDeterminationsAndForecasts()
                         }
@@ -738,64 +754,32 @@ extension Treatments.StateModel {
                 await self.updateForecasts(with: forecastData)
             }
         }.store(in: &subscriptions)
-
-        // Due to the Batch insert this only is used for observing Deletion of Glucose entries
-        coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
-            guard let self = self else { return }
-            self.setupGlucoseArray()
-        }.store(in: &subscriptions)
-    }
-
-    private func registerSubscribers() {
-        glucoseStorage.updatePublisher
-            .receive(on: DispatchQueue.global(qos: .background))
-            .sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupGlucoseArray()
-            }
-            .store(in: &subscriptions)
     }
 }
 
 // MARK: - Setup Glucose and Determinations
 
 extension Treatments.StateModel {
-    // Glucose
-    private func setupGlucoseArray() {
-        Task {
-            do {
-                let ids = try await self.fetchGlucose()
-                let glucoseObjects: [GlucoseStored] = try await CoreDataStack.shared
-                    .getNSManagedObject(with: ids, context: viewContext)
-                await updateGlucoseArray(with: glucoseObjects)
-            } catch {
-                debug(
-                    .default,
-                    "\(DebuggingIdentifiers.failed) Error setting up glucose array: \(error)"
-                )
+    // MARK: - Glucose Controller
+
+    @MainActor func setupGlucoseController() {
+        glucoseControllerDelegate.onContentChange = { [weak self] in
+            Task { @MainActor in
+                self?.updateGlucoseFromController()
             }
+        }
+
+        do {
+            try glucoseController.performFetch()
+            updateGlucoseFromController()
+        } catch {
+            debug(.default, "\(DebuggingIdentifiers.failed) Failed to perform glucose fetch: \(error)")
         }
     }
 
-    private func fetchGlucose() async throws -> [NSManagedObjectID] {
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: glucoseFetchContext,
-            predicate: NSPredicate.glucose,
-            key: "date",
-            ascending: false
-        )
+    @MainActor private func updateGlucoseFromController() {
+        guard let objects = glucoseController.fetchedObjects else { return }
 
-        return try await glucoseFetchContext.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID)
-        }
-    }
-
-    @MainActor private func updateGlucoseArray(with objects: [GlucoseStored]) {
         // Store all objects for the forecast graph
         glucoseFromPersistence = objects
 
