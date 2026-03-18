@@ -127,7 +127,6 @@ extension Home {
         var maxValueIobChart: Decimal = 5
 
         let taskContext = CoreDataStack.shared.newTaskContext()
-        let determinationFetchContext = CoreDataStack.shared.newTaskContext()
         let tddFetchContext = CoreDataStack.shared.newTaskContext()
         let pumpHistoryFetchContext = CoreDataStack.shared.newTaskContext()
         let overrideFetchContext = CoreDataStack.shared.newTaskContext()
@@ -188,6 +187,43 @@ extension Home {
             return controller
         }()
 
+        @ObservationIgnored let enactedDeterminationControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var enactedDeterminationController: NSFetchedResultsController<OrefDetermination> =
+            {
+                let request = NSFetchRequest<OrefDetermination>(entityName: "OrefDetermination")
+                request.sortDescriptors = [NSSortDescriptor(keyPath: \OrefDetermination.deliverAt, ascending: false)]
+                request.predicate = NSPredicate.enactedDetermination
+                request.fetchLimit = 1
+
+                let controller = NSFetchedResultsController(
+                    fetchRequest: request,
+                    managedObjectContext: viewContext,
+                    sectionNameKeyPath: nil,
+                    cacheName: nil
+                )
+                controller.delegate = enactedDeterminationControllerDelegate
+                return controller
+            }()
+
+        @ObservationIgnored let determinationControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var determinationController: NSFetchedResultsController<OrefDetermination> = {
+            let request = NSFetchRequest<OrefDetermination>(entityName: "OrefDetermination")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \OrefDetermination.deliverAt, ascending: false)]
+            request.predicate = NSPredicate.determinationsForCobIobCharts
+            request.fetchBatchSize = 50
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = determinationControllerDelegate
+            return controller
+        }()
+
         // Queue for handling Core Data change notifications
         private let queue = DispatchQueue(label: "HomeStateModel.queue", qos: .userInitiated)
         private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
@@ -225,12 +261,11 @@ extension Home {
                 await self.setupGlucoseController()
                 await self.setupCarbsController()
                 await self.setupFPUController()
+                await self.setupEnactedDeterminationController()
+                await self.setupDeterminationController()
 
                 // The rest can be initialized concurrently
                 await withTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        self.setupDeterminationsArray()
-                    }
                     group.addTask {
                         self.setupTDDArray()
                     }
@@ -283,11 +318,6 @@ extension Home {
         }
 
         private func registerHandlers() {
-            coreDataPublisher?.filteredByEntityName("OrefDetermination").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupDeterminationsArray()
-            }.store(in: &subscriptions)
-
             coreDataPublisher?.filteredByEntityName("TDDStored").sink { [weak self] _ in
                 guard let self = self else { return }
                 self.setupTDDArray()
