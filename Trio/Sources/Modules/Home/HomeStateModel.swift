@@ -127,7 +127,6 @@ extension Home {
         var maxValueIobChart: Decimal = 5
 
         let taskContext = CoreDataStack.shared.newTaskContext()
-        let tddFetchContext = CoreDataStack.shared.newTaskContext()
         let viewContext = CoreDataStack.shared.persistentContainer.viewContext
 
         @ObservationIgnored let glucoseControllerDelegate = FetchedResultsControllerDelegate()
@@ -341,9 +340,24 @@ extension Home {
             return controller
         }()
 
-        // Queue for handling Core Data change notifications
-        private let queue = DispatchQueue(label: "HomeStateModel.queue", qos: .userInitiated)
-        private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
+        @ObservationIgnored let tddControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var tddController: NSFetchedResultsController<TDDStored> = {
+            let request = NSFetchRequest<TDDStored>(entityName: "TDDStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \TDDStored.date, ascending: false)]
+            request.predicate = NSPredicate.predicateForOneDayAgo
+            request.fetchLimit = 1
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = tddControllerDelegate
+            return controller
+        }()
+
         private var subscriptions = Set<AnyCancellable>()
 
         typealias PumpEvent = PumpEventStored.EventType
@@ -353,14 +367,7 @@ extension Home {
         }
 
         override func subscribe() {
-            coreDataPublisher =
-                changedObjectsOnManagedObjectContextDidSavePublisher()
-                    .receive(on: queue)
-                    .share()
-                    .eraseToAnyPublisher()
-
             registerSubscribers()
-            registerHandlers()
 
             // Parallelize Setup functions
             setupHomeViewConcurrently()
@@ -387,12 +394,10 @@ extension Home {
                 await self.setupTempTargetController()
                 await self.setupTempTargetRunController()
                 await self.setupBatteryController()
+                await self.setupTDDController()
 
                 // The rest can be initialized concurrently
                 await withTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        self.setupTDDArray()
-                    }
                     group.addTask {
                         await self.setupBasalProfile()
                     }
@@ -418,13 +423,6 @@ extension Home {
                     self.currentIOB = self.iobService.currentIOB ?? 0
                 }
                 .store(in: &subscriptions)
-        }
-
-        private func registerHandlers() {
-            coreDataPublisher?.filteredByEntityName("TDDStored").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupTDDArray()
-            }.store(in: &subscriptions)
         }
 
         private func registerObservers() {
