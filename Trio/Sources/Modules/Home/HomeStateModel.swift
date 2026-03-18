@@ -128,7 +128,6 @@ extension Home {
 
         let taskContext = CoreDataStack.shared.newTaskContext()
         let tddFetchContext = CoreDataStack.shared.newTaskContext()
-        let pumpHistoryFetchContext = CoreDataStack.shared.newTaskContext()
         let overrideFetchContext = CoreDataStack.shared.newTaskContext()
         let tempTargetFetchContext = CoreDataStack.shared.newTaskContext()
         let batteryFetchContext = CoreDataStack.shared.newTaskContext()
@@ -224,6 +223,42 @@ extension Home {
             return controller
         }()
 
+        @ObservationIgnored let insulinControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var insulinController: NSFetchedResultsController<PumpEventStored> = {
+            let request = NSFetchRequest<PumpEventStored>(entityName: "PumpEventStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: true)]
+            request.predicate = NSPredicate.pumpHistoryLast24h
+            request.fetchBatchSize = 30
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = insulinControllerDelegate
+            return controller
+        }()
+
+        @ObservationIgnored let lastBolusControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var lastBolusController: NSFetchedResultsController<PumpEventStored> = {
+            let request = NSFetchRequest<PumpEventStored>(entityName: "PumpEventStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: false)]
+            request.predicate = NSPredicate.lastPumpBolus
+            request.fetchLimit = 1
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = lastBolusControllerDelegate
+            return controller
+        }()
+
         // Queue for handling Core Data change notifications
         private let queue = DispatchQueue(label: "HomeStateModel.queue", qos: .userInitiated)
         private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
@@ -263,17 +298,13 @@ extension Home {
                 await self.setupFPUController()
                 await self.setupEnactedDeterminationController()
                 await self.setupDeterminationController()
+                await self.setupInsulinController()
+                await self.setupLastBolusController()
 
                 // The rest can be initialized concurrently
                 await withTaskGroup(of: Void.self) { group in
                     group.addTask {
                         self.setupTDDArray()
-                    }
-                    group.addTask {
-                        self.setupInsulinArray()
-                    }
-                    group.addTask {
-                        self.setupLastBolus()
                     }
                     group.addTask {
                         self.setupBatteryArray()
@@ -321,14 +352,6 @@ extension Home {
             coreDataPublisher?.filteredByEntityName("TDDStored").sink { [weak self] _ in
                 guard let self = self else { return }
                 self.setupTDDArray()
-            }.store(in: &subscriptions)
-
-            coreDataPublisher?.filteredByEntityName("PumpEventStored").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupInsulinArray()
-                self.setupLastBolus()
-                self.displayPumpStatusHighlightMessage()
-                self.displayPumpStatusBadge()
             }.store(in: &subscriptions)
 
             coreDataPublisher?.filteredByEntityName("OpenAPS_Battery").sink { [weak self] _ in
@@ -552,7 +575,7 @@ extension Home {
 
         /// Display the eventual status message provided by the manager of the pump
         /// Only display if state is warning or critical message else return nil
-        private func displayPumpStatusHighlightMessage(_ didDeactivate: Bool = false) {
+        func displayPumpStatusHighlightMessage(_ didDeactivate: Bool = false) {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 if let statusHighlight = self.provider.deviceManager.pumpManager?.pumpStatusHighlight,
@@ -566,7 +589,7 @@ extension Home {
             }
         }
 
-        private func displayPumpStatusBadge(_ didDeactivate: Bool = false) {
+        func displayPumpStatusBadge(_ didDeactivate: Bool = false) {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 if let statusBadge = self.provider.deviceManager.pumpManager?.pumpStatusBadge,
