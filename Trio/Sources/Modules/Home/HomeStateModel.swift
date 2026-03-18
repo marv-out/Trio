@@ -127,8 +127,6 @@ extension Home {
         var maxValueIobChart: Decimal = 5
 
         let taskContext = CoreDataStack.shared.newTaskContext()
-        let carbsFetchContext = CoreDataStack.shared.newTaskContext()
-        let fpuFetchContext = CoreDataStack.shared.newTaskContext()
         let determinationFetchContext = CoreDataStack.shared.newTaskContext()
         let tddFetchContext = CoreDataStack.shared.newTaskContext()
         let pumpHistoryFetchContext = CoreDataStack.shared.newTaskContext()
@@ -137,7 +135,7 @@ extension Home {
         let batteryFetchContext = CoreDataStack.shared.newTaskContext()
         let viewContext = CoreDataStack.shared.persistentContainer.viewContext
 
-        @ObservationIgnored let glucoseControllerDelegate = GlucoseFetchedResultsControllerDelegate()
+        @ObservationIgnored let glucoseControllerDelegate = FetchedResultsControllerDelegate()
 
         @ObservationIgnored private(set) lazy var glucoseController: NSFetchedResultsController<GlucoseStored> = {
             let request = NSFetchRequest<GlucoseStored>(entityName: "GlucoseStored")
@@ -152,6 +150,41 @@ extension Home {
                 cacheName: nil
             )
             controller.delegate = glucoseControllerDelegate
+            return controller
+        }()
+
+        @ObservationIgnored let carbsControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var carbsController: NSFetchedResultsController<CarbEntryStored> = {
+            let request = NSFetchRequest<CarbEntryStored>(entityName: "CarbEntryStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \CarbEntryStored.date, ascending: false)]
+            request.predicate = NSPredicate.carbsForChart
+            request.fetchBatchSize = 5
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = carbsControllerDelegate
+            return controller
+        }()
+
+        @ObservationIgnored let fpuControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var fpuController: NSFetchedResultsController<CarbEntryStored> = {
+            let request = NSFetchRequest<CarbEntryStored>(entityName: "CarbEntryStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \CarbEntryStored.date, ascending: false)]
+            request.predicate = NSPredicate.fpusForChart
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = fpuControllerDelegate
             return controller
         }()
 
@@ -188,17 +221,13 @@ extension Home {
                 await self.setupCGMSettings()
                 self.registerObservers()
 
-                // Set up NSFetchedResultsController for glucose (requires MainActor for viewContext)
+                // Set up NSFetchedResultsControllers (requires MainActor for viewContext)
                 await self.setupGlucoseController()
+                await self.setupCarbsController()
+                await self.setupFPUController()
 
                 // The rest can be initialized concurrently
                 await withTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        self.setupCarbsArray()
-                    }
-                    group.addTask {
-                        self.setupFPUsArray()
-                    }
                     group.addTask {
                         self.setupDeterminationsArray()
                     }
@@ -251,14 +280,6 @@ extension Home {
                     self.currentIOB = self.iobService.currentIOB ?? 0
                 }
                 .store(in: &subscriptions)
-
-            carbsStorage.updatePublisher
-                .receive(on: queue)
-                .sink { [weak self] _ in
-                    guard let self = self else { return }
-                    self.setupFPUsArray()
-                }
-                .store(in: &subscriptions)
         }
 
         private func registerHandlers() {
@@ -270,11 +291,6 @@ extension Home {
             coreDataPublisher?.filteredByEntityName("TDDStored").sink { [weak self] _ in
                 guard let self = self else { return }
                 self.setupTDDArray()
-            }.store(in: &subscriptions)
-
-            coreDataPublisher?.filteredByEntityName("CarbEntryStored").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupCarbsArray()
             }.store(in: &subscriptions)
 
             coreDataPublisher?.filteredByEntityName("PumpEventStored").sink { [weak self] _ in
@@ -754,7 +770,7 @@ extension Home.StateModel: PumpManagerOnboardingDelegate {
 
 // MARK: - NSFetchedResultsController Delegate
 
-final class GlucoseFetchedResultsControllerDelegate: NSObject, NSFetchedResultsControllerDelegate {
+final class FetchedResultsControllerDelegate: NSObject, NSFetchedResultsControllerDelegate {
     var onContentChange: (() -> Void)?
 
     func controllerDidChangeContent(_: NSFetchedResultsController<any NSFetchRequestResult>) {
