@@ -110,7 +110,6 @@ extension Treatments {
         var preprocessedData: [(id: UUID, forecast: Forecast, forecastValue: ForecastValue)] = []
         var predictionsForChart: Predictions?
         var simulatedDetermination: Determination?
-        @MainActor var determinationObjectIDs: [NSManagedObjectID] = []
 
         var minForecast: [Int] = []
         var maxForecast: [Int] = []
@@ -122,7 +121,6 @@ extension Treatments {
         let now = Date.now
 
         let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-        let determinationFetchContext = CoreDataStack.shared.newTaskContext()
 
         @ObservationIgnored let glucoseControllerDelegate = FetchedResultsControllerDelegate()
 
@@ -142,14 +140,29 @@ extension Treatments {
             return controller
         }()
 
+        @ObservationIgnored let determinationControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var determinationController: NSFetchedResultsController<OrefDetermination> = {
+            let request = NSFetchRequest<OrefDetermination>(entityName: "OrefDetermination")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \OrefDetermination.deliverAt, ascending: false)]
+            request.predicate = NSPredicate.predicateFor30MinAgoForDetermination
+            request.fetchLimit = 1
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = determinationControllerDelegate
+            return controller
+        }()
+
         var isActive: Bool = false
 
         var showDeterminationFailureAlert = false
         var determinationFailureMessage = ""
 
-        // Queue for handling Core Data change notifications
-        private let queue = DispatchQueue(label: "TreatmentsStateModel.queue", qos: .userInitiated)
-        private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
         private var subscriptions = Set<AnyCancellable>()
 
         typealias PumpEvent = PumpEventStored.EventType
@@ -168,12 +181,6 @@ extension Treatments {
             }
 
             debug(.bolusState, "subscribe fired")
-            coreDataPublisher =
-                changedObjectsOnManagedObjectContextDidSavePublisher()
-                    .receive(on: queue)
-                    .share()
-                    .eraseToAnyPublisher()
-            registerHandlers()
             setupBolusStateConcurrently()
             subscribeToBolusProgress()
         }
@@ -200,13 +207,14 @@ extension Treatments {
         private func setupBolusStateConcurrently() {
             debug(.bolusState, "Setting up bolus state concurrently...")
             Task {
-                // Set up NSFetchedResultsController (requires MainActor for viewContext)
+                // Set up NSFetchedResultsControllers (requires MainActor for viewContext)
                 await self.setupGlucoseController()
+                await self.setupDeterminationController()
 
                 do {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
-                            self.setupDeterminationsAndForecasts()
+                            await self.getAllSettingsValues()
                         }
                         group.addTask {
                             await self.setupSettings()
@@ -278,20 +286,6 @@ extension Treatments {
                         self.maxCOB = getPreferences.maxCOB
                     }
                 }
-            }
-        }
-
-        private func setupDeterminationsAndForecasts() {
-            Task {
-                async let getAllSettingsDefaults: () = getAllSettingsValues()
-                async let setupDeterminations: () = setupDeterminationsArray()
-
-                await getAllSettingsDefaults
-                await setupDeterminations
-
-                // Determination has updated, so we can use this to draw the initial Forecast Chart
-                let forecastData = await mapForecastsForChart()
-                await updateForecasts(with: forecastData)
             }
         }
 
@@ -744,19 +738,6 @@ extension Treatments.StateModel: DeterminationObserver, BolusFailureObserver {
     }
 }
 
-extension Treatments.StateModel {
-    private func registerHandlers() {
-        coreDataPublisher?.filteredByEntityName("OrefDetermination").sink { [weak self] _ in
-            guard let self = self else { return }
-            Task {
-                await self.setupDeterminationsArray()
-                let forecastData = await self.mapForecastsForChart()
-                await self.updateForecasts(with: forecastData)
-            }
-        }.store(in: &subscriptions)
-    }
-}
-
 // MARK: - Setup Glucose and Determinations
 
 extension Treatments.StateModel {
@@ -807,98 +788,84 @@ extension Treatments.StateModel {
         deltaBG = delta
     }
 
-    // Determinations
-    private func setupDeterminationsArray() async {
-        do {
-            let fetchedObjectIDs = try await determinationStorage.fetchLastDeterminationObjectID(
-                predicate: NSPredicate.predicateFor30MinAgoForDetermination
-            )
+    // MARK: - Determination Controller
 
-            await MainActor.run {
-                determinationObjectIDs = fetchedObjectIDs
+    @MainActor func setupDeterminationController() {
+        determinationControllerDelegate.onContentChange = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.updateDeterminationFromController()
+                self.insulinCalculated = await self.calculateInsulin()
+                let forecastData = self.mapForecastsFromController()
+                await self.updateForecasts(with: forecastData)
             }
+        }
 
-            let determinationObjects: [OrefDetermination] = try await CoreDataStack.shared
-                .getNSManagedObject(with: determinationObjectIDs, context: viewContext)
-
-            updateDeterminationsArray(with: determinationObjects)
-        } catch let error as CoreDataError {
-            debug(.default, "Core Data error: \(error)")
+        do {
+            try determinationController.performFetch()
+            updateDeterminationFromController()
+            Task {
+                insulinCalculated = await calculateInsulin()
+                let forecastData = mapForecastsFromController()
+                await updateForecasts(with: forecastData)
+            }
         } catch {
-            debug(.default, "Unexpected error: \(error)")
+            debug(.default, "\(DebuggingIdentifiers.failed) Failed to perform determination fetch: \(error)")
         }
     }
 
-    private func mapForecastsForChart() async -> Determination? {
-        do {
-            let determinationObjects: [OrefDetermination] = try await CoreDataStack.shared
-                .getNSManagedObject(with: determinationObjectIDs, context: determinationFetchContext)
+    @MainActor private func updateDeterminationFromController() {
+        guard let objects = determinationController.fetchedObjects,
+              let mostRecentDetermination = objects.first else { return }
 
-            let determination = await determinationFetchContext.perform {
-                let determinationObject = determinationObjects.first
+        determination = objects
 
-                let forecastsSet = determinationObject?.forecasts ?? []
-                let predictions = Predictions(
-                    iob: forecastsSet.extractValues(for: "iob"),
-                    zt: forecastsSet.extractValues(for: "zt"),
-                    cob: forecastsSet.extractValues(for: "cob"),
-                    uam: forecastsSet.extractValues(for: "uam")
-                )
+        // setup vars for bolus calculation
+        insulinRequired = (mostRecentDetermination.insulinReq ?? 0) as Decimal
+        evBG = (mostRecentDetermination.eventualBG ?? 0) as Decimal
+        minPredBG = (mostRecentDetermination.minPredBGFromReason ?? 0) as Decimal
+        lastLoopDate = apsManager.lastLoopDate as Date?
+        insulin = (mostRecentDetermination.insulinForManualBolus ?? 0) as Decimal
+        target = (mostRecentDetermination.currentTarget ?? currentBGTarget as NSDecimalNumber) as Decimal
+        isf = (mostRecentDetermination.insulinSensitivity ?? currentISF as NSDecimalNumber) as Decimal
+        cob = mostRecentDetermination.cob as Int16
+        iob = (mostRecentDetermination.iob ?? 0) as Decimal
+        basal = (mostRecentDetermination.tempBasal ?? 0) as Decimal
+        carbRatio = (mostRecentDetermination.carbRatio ?? currentCarbRatio as NSDecimalNumber) as Decimal
+    }
 
-                return Determination(
-                    id: UUID(),
-                    reason: "",
-                    units: 0,
-                    insulinReq: 0,
-                    sensitivityRatio: 0,
-                    rate: 0,
-                    duration: 0,
-                    iob: 0,
-                    cob: 0,
-                    predictions: predictions.isEmpty ? nil : predictions,
-                    carbsReq: 0,
-                    temp: nil,
-                    reservoir: 0,
-                    insulinForManualBolus: 0,
-                    manualBolusErrorString: 0,
-                    carbRatio: 0,
-                    received: false
-                )
-            }
-
-            guard !determinationObjects.isEmpty else {
-                return nil
-            }
-
-            return determination
-        } catch {
-            debug(
-                .default,
-                "\(DebuggingIdentifiers.failed) Error mapping forecasts for chart: \(error)"
-            )
+    @MainActor private func mapForecastsFromController() -> Determination? {
+        guard let determinationObject = determinationController.fetchedObjects?.first else {
             return nil
         }
-    }
 
-    private func updateDeterminationsArray(with objects: [OrefDetermination]) {
-        Task { @MainActor in
-            guard let mostRecentDetermination = objects.first else { return }
-            determination = objects
+        let forecastsSet = determinationObject.forecasts ?? []
+        let predictions = Predictions(
+            iob: forecastsSet.extractValues(for: "iob"),
+            zt: forecastsSet.extractValues(for: "zt"),
+            cob: forecastsSet.extractValues(for: "cob"),
+            uam: forecastsSet.extractValues(for: "uam")
+        )
 
-            // setup vars for bolus calculation
-            insulinRequired = (mostRecentDetermination.insulinReq ?? 0) as Decimal
-            evBG = (mostRecentDetermination.eventualBG ?? 0) as Decimal
-            minPredBG = (mostRecentDetermination.minPredBGFromReason ?? 0) as Decimal
-            lastLoopDate = apsManager.lastLoopDate as Date?
-            insulin = (mostRecentDetermination.insulinForManualBolus ?? 0) as Decimal
-            target = (mostRecentDetermination.currentTarget ?? currentBGTarget as NSDecimalNumber) as Decimal
-            isf = (mostRecentDetermination.insulinSensitivity ?? currentISF as NSDecimalNumber) as Decimal
-            cob = mostRecentDetermination.cob as Int16
-            iob = (mostRecentDetermination.iob ?? 0) as Decimal
-            basal = (mostRecentDetermination.tempBasal ?? 0) as Decimal
-            carbRatio = (mostRecentDetermination.carbRatio ?? currentCarbRatio as NSDecimalNumber) as Decimal
-            insulinCalculated = await calculateInsulin()
-        }
+        return Determination(
+            id: UUID(),
+            reason: "",
+            units: 0,
+            insulinReq: 0,
+            sensitivityRatio: 0,
+            rate: 0,
+            duration: 0,
+            iob: 0,
+            cob: 0,
+            predictions: predictions.isEmpty ? nil : predictions,
+            carbsReq: 0,
+            temp: nil,
+            reservoir: 0,
+            insulinForManualBolus: 0,
+            manualBolusErrorString: 0,
+            carbRatio: 0,
+            received: false
+        )
     }
 }
 
