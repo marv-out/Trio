@@ -797,13 +797,3 @@ extension Home.StateModel: PumpManagerOnboardingDelegate {
         // nothing to do
     }
 }
-
-// MARK: - NSFetchedResultsController Delegate
-
-final class FetchedResultsControllerDelegate: NSObject, NSFetchedResultsControllerDelegate {
-    var onContentChange: (() -> Void)?
-
-    func controllerDidChangeContent(_: NSFetchedResultsController<any NSFetchRequestResult>) {
-        onContentChange?()
-    }
-}
