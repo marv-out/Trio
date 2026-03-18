@@ -128,7 +128,6 @@ extension Home {
 
         let taskContext = CoreDataStack.shared.newTaskContext()
         let tddFetchContext = CoreDataStack.shared.newTaskContext()
-        let overrideFetchContext = CoreDataStack.shared.newTaskContext()
         let tempTargetFetchContext = CoreDataStack.shared.newTaskContext()
         let batteryFetchContext = CoreDataStack.shared.newTaskContext()
         let viewContext = CoreDataStack.shared.persistentContainer.viewContext
@@ -259,6 +258,40 @@ extension Home {
             return controller
         }()
 
+        @ObservationIgnored let overrideControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var overrideController: NSFetchedResultsController<OverrideStored> = {
+            let request = NSFetchRequest<OverrideStored>(entityName: "OverrideStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \OverrideStored.date, ascending: false)]
+            request.predicate = NSPredicate.lastActiveOverride
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = overrideControllerDelegate
+            return controller
+        }()
+
+        @ObservationIgnored let overrideRunControllerDelegate = FetchedResultsControllerDelegate()
+
+        @ObservationIgnored private(set) lazy var overrideRunController: NSFetchedResultsController<OverrideRunStored> = {
+            let request = NSFetchRequest<OverrideRunStored>(entityName: "OverrideRunStored")
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \OverrideRunStored.startDate, ascending: false)]
+            request.predicate = NSPredicate(format: "startDate >= %@", Date.oneDayAgo as NSDate)
+
+            let controller = NSFetchedResultsController(
+                fetchRequest: request,
+                managedObjectContext: viewContext,
+                sectionNameKeyPath: nil,
+                cacheName: nil
+            )
+            controller.delegate = overrideRunControllerDelegate
+            return controller
+        }()
+
         // Queue for handling Core Data change notifications
         private let queue = DispatchQueue(label: "HomeStateModel.queue", qos: .userInitiated)
         private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
@@ -300,6 +333,8 @@ extension Home {
                 await self.setupDeterminationController()
                 await self.setupInsulinController()
                 await self.setupLastBolusController()
+                await self.setupOverrideController()
+                await self.setupOverrideRunController()
 
                 // The rest can be initialized concurrently
                 await withTaskGroup(of: Void.self) { group in
@@ -317,12 +352,6 @@ extension Home {
                     }
                     group.addTask {
                         self.setupReservoir()
-                    }
-                    group.addTask {
-                        self.setupOverrides()
-                    }
-                    group.addTask {
-                        self.setupOverrideRunStored()
                     }
                     group.addTask {
                         self.setupTempTargetsStored()
@@ -357,16 +386,6 @@ extension Home {
             coreDataPublisher?.filteredByEntityName("OpenAPS_Battery").sink { [weak self] _ in
                 guard let self = self else { return }
                 self.setupBatteryArray()
-            }.store(in: &subscriptions)
-
-            coreDataPublisher?.filteredByEntityName("OverrideStored").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupOverrides()
-            }.store(in: &subscriptions)
-
-            coreDataPublisher?.filteredByEntityName("OverrideRunStored").sink { [weak self] _ in
-                guard let self = self else { return }
-                self.setupOverrideRunStored()
             }.store(in: &subscriptions)
 
             coreDataPublisher?.filteredByEntityName("TempTargetStored").sink { [weak self] _ in
