@@ -65285,6 +65285,9 @@
         }
       }
     },
+    "CGM noise level too high: %lld." : {
+
+    },
     "CGM: " : {
 
     },
@@ -74783,6 +74786,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法存取檔案目錄"
+          }
+        }
+      }
+    },
+    "Could not calculate eventual glucose. Sensitivity: %@, Deviation: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not calculate eventual glucose. Sensitivity: %1$@, Deviation: %2$@"
           }
         }
       }
@@ -107333,6 +107346,12 @@
         }
       }
     },
+    "Error: could not determine target_bg. " : {
+
+    },
+    "Error: could not get current basal rate" : {
+
+    },
     "Error! Bolus cancellation failed with error: %@" : {
       "comment" : "Error message for canceling a bolus",
       "localizations" : {
@@ -109290,6 +109309,9 @@
           }
         }
       }
+    },
+    "EXPERIMENTAL FEATURE! Enables new, fully Swift-based algorithm version." : {
+      "comment" : "Use Swift Oref mini hint"
     },
     "Expiration Reminder" : {
       "extractionState" : "manual",
@@ -122381,6 +122403,9 @@
           }
         }
       }
+    },
+    "Glucose out of range: %@." : {
+
     },
     "Glucose Reading" : {
       "localizations" : {
@@ -166043,6 +166068,9 @@
         }
       }
     },
+    "Missing required inputs; cannot determine basal." : {
+
+    },
     "mmol/L" : {
       "comment" : "The short unit display string for millimoles of glucose per liter",
       "localizations" : {
@@ -170364,6 +170392,9 @@
         }
       }
     },
+    "No glucose delta (flat readings); cannot determine trend." : {
+
+    },
     "No Glucose Notifications will be triggered." : {
       "localizations" : {
         "bg" : {
@@ -170717,6 +170748,12 @@
           }
         }
       }
+    },
+    "No glucose status; cannot determine basal." : {
+
+    },
+    "No IOB data available; cannot determine basal." : {
+
     },
     "No Libre Transmitter Selected" : {
       "comment" : "No Libre Transmitter Selected",
@@ -171440,6 +171477,9 @@
           }
         }
       }
+    },
+    "No profile; cannot determine basal." : {
+
     },
     "No recent oref algorithm determination." : {
       "localizations" : {
@@ -240611,6 +240651,9 @@
         }
       }
     },
+    "This feature is EXPERIMENTAL and not yet cleared for general use." : {
+
+    },
     "This feature resets the Autosens Ratio to neutral when you rewind your pump on the assumption that this corresponds to a site change." : {
       "localizations" : {
         "bg" : {
@@ -260561,6 +260604,9 @@
         }
       }
     },
+    "Unknown determination error." : {
+
+    },
     "Unknown Error" : {
       "localizations" : {
         "bg" : {
@@ -264167,6 +264213,9 @@
           }
         }
       }
+    },
+    "Use Swift Oref" : {
+      "comment" : "Use Swift Oref"
     },
     "User Interface" : {
       "localizations" : {
@@ -268650,6 +268699,223 @@
         }
       }
     },
+    "We use anonymous crash report information exclusively to:" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "bg" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use anonymous crash report information exclusively to:"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vi bruger anonym crash report information udelukkende til:"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wir verwenden anonyme Absturzprotokolle ausschließlich zu folgenden Zwecken:"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use anonymous crash report information exclusively to:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nous utilisons les rapports de crash anonymes exclusivement pour :"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use anonymous crash report information exclusively to:"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use anonymous crash report information exclusively to:"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use anonymous crash report information exclusively to:"
+          }
+        },
+        "nb-NO" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vi bruker anonym krasjrapportering kun for å:"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "We gebruiken anonieme informatie over crashrapport uitsluitend voor:"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Używamy anonimowych informacji o zgłoszeniach awarii wyłącznie do:"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use anonymous crash report information exclusively to:"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vi använder anonymiserade kraschrapport endast för att:"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use anonymous crash report information exclusively to:"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use anonymous crash report information exclusively to:"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chúng tôi chỉ sử dụng thông tin báo cáo sự cố ẩn danh để:"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我們僅使用匿名崩潰報告資訊以："
+          }
+        }
+      }
+    },
+    "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "bg" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vi bruger Google Firebase Crashlytics til at indsamle og analysere nedbrudsrapporter. Crashlytics' privatlivspraksis er underlagt Googles privatlivspolitik. For mere information om, hvordan Crashlytics behandler data, besøg deres dokumentation."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wir verwenden Google Firebase Crashlytics zum Sammeln und Analysieren von Absturzprotokollen. Die Datenschutzpraktiken von Crashlytics unterliegen den Datenschutzbestimmungen von Google. Weitere Informationen darüber, wie Crashlytics Daten verarbeitet, findest Du in deren Dokumentation."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nous utilisons Google Firebase Crashlytics pour collecter et analyser les rapports de crash. Les pratiques de confidentialité de Crashlytics sont régies par la politique de confidentialité de Google. Pour en savoir plus sur la manière dont Crashlytics traite les données, veuillez consulter leur documentation."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation."
+          }
+        },
+        "nb-NO" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vi bruker Google Firebase Crashlytics for å samle og analysere krasjrapporter. Crashlytics er styrt av Google's personvernerklæring. For mer informasjon om hvordan Crashlytics behandler data, vennligst gå til deres dokumentasjon."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "We gebruiken Google Firebase Crashlytics om crashrapporten te verzamelen en te analyseren. Crashlytische privacypraktijken worden geregeld door het Google Privacybeleid. Bezoek de documentatie van Crashlytics voor meer informatie over hoe de data verwerkt wordt."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Używamy Google Firebase Crashlytics do zbierania i analizowania raportów o awariach. Praktyki dotyczące prywatności Crashlytics są regulowane przez Politykę prywatności Google. Aby uzyskać więcej informacji o tym jak Crashlytics przetwarza dane zapoznaj się z ich dokumentacją."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vi använder Google Firebase Crashlytics för att samla in och analysera kraschrapporter. Crashlytics integritetspraxis styrs av Googles integritetspolicy. För mer information om hur Crashlytics behandlar data, ta del av deras dokumentation."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "We use Google Firebase Crashlytics to collect and analyze crash reports. Crashlytics' privacy practices are governed by the Google Privacy Policy. For more information about how Crashlytics processes data, please visit their documentation."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chúng tôi sử dụng Google Firebase Crashlytics để thu thập và phân tích báo cáo sự cố. Các hoạt động bảo mật của Crashlytics được quản lý bởi Chính sách bảo mật của Google. Để biết thêm thông tin về cách Crashlytics xử lý dữ liệu, vui lòng truy cập tài liệu của họ."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我們使用 Google Firebase Crashlytics 收集和分析崩潰報告。Crashlytics 的隱私政策受 Google 隱私政策的約束。欲了解有關 Crashlytics 如何處理資料的更多資訊，請參閱他們的文檔。"
+          }
+        }
+      }
+    },
+    "We're building a faster and more maintainable Swift version of the algorithm (Oref) that runs in Trio. It's faster, more accurate and improves Trio for everyone." : {
+
+    },
     "Week" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -270788,6 +271054,9 @@
           }
         }
       }
+    },
+    "When enabled, Trio will no longer use the old JavaScript-based algorithm that runs virtualized on your phone. Instead, it will use a fully Swift-based algorithm." : {
+
     },
     "When Remote Control is enabled, you can send boluses, overrides, temporary targets, carbs, and other commands to Trio via push notifications." : {
       "localizations" : {
@@ -274626,6 +274895,9 @@
           }
         }
       }
+    },
+    "You can disable this feature anytime." : {
+
     },
     "You can influence the adjustments made by Dynamic ISF primarily by adjusting Autosens Max, Autosens Min, and Adjustment Factor. Other settings also influence Dynamic ISF's response, such as Glucose Target, Profile ISF, Peak Insulin Time, and Weighted Average of TDD." : {
       "localizations" : {
