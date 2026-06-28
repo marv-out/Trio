@@ -155,6 +155,10 @@ extension Notification.Name {
             do {
                 try await coreDataStack.initializeStack()
 
+                // Bring up the GRDB store and run one-time Core Data → GRDB data migrations.
+                // Must run after Core Data is initialized (the migration reads from it).
+                try await GRDBStack.shared.bootstrap()
+
                 // TODO: possibly wrap this in a UserDefault / TinyStorage flag check, so we do not even attempt to fetch files unnecessary, but early exit the import
                 await performJsonToCoreDataMigrationIfNeeded()
 

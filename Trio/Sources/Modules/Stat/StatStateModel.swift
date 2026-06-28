@@ -14,7 +14,7 @@ extension Stat {
         var timeInRangeType: TimeInRangeType = .timeInTightRange
         var useFPUconversion: Bool = false
         var glucoseFromPersistence: [GlucoseStored] = []
-        var loopStatRecords: [LoopStatRecord] = []
+        var loopStatRecords: [LoopStat] = []
         var loopStats: [LoopStatsProcessedData] = []
         var groupedLoopStats: [LoopStatsByPeriod] = []
         var bolusStats: [BolusStats] = []

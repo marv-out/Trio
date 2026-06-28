@@ -2,7 +2,7 @@ import Charts
 import SwiftUI
 
 struct LoopBarChartView: View {
-    let loopStatRecords: [LoopStatRecord]
+    let loopStatRecords: [LoopStat]
     let selectedInterval: Stat.StateModel.StatsTimeIntervalWithToday
     let statsData: [LoopStatsProcessedData]
 

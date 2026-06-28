@@ -333,25 +333,13 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func calculateLoopInterval(loopStartDate: Date) async -> Double? {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "calculateLoopInterval"
         do {
-            return try await context.perform { [weak self] in
-                guard let self else { return nil }
-                let requestStats = LoopStatRecord.fetchRequest() as NSFetchRequest<LoopStatRecord>
-                let sortStats = NSSortDescriptor(key: "end", ascending: false)
-                requestStats.sortDescriptors = [sortStats]
-                requestStats.fetchLimit = 1
-                let previousLoop = try context.fetch(requestStats)
-
-                if (previousLoop.first?.end ?? .distantFuture) < loopStartDate {
-                    return self.roundDouble(
-                        (loopStartDate - (previousLoop.first?.end ?? Date())).timeInterval / 60,
-                        1
-                    )
-                }
-                return nil
+            // No previous loop yet → no interval (matches the former `.distantFuture` guard).
+            guard let lastEnd = try await LoopStatStore.lastEnd() else { return nil }
+            if lastEnd < loopStartDate {
+                return roundDouble((loopStartDate - lastEnd).timeInterval / 60, 1)
             }
+            return nil
         } catch {
             debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to fetch the last loop with error: \(error)")
             return nil
@@ -923,7 +911,7 @@ final class BaseAPSManager: APSManager, Injectable {
         return output
     }
 
-    private func loops(_ fetchedLoops: [LoopStatRecord]) -> Loops {
+    private func loops(_ fetchedLoops: [LoopStat]) -> Loops {
         let loops = fetchedLoops
         // First date
         let previous = loops.last?.end ?? Date()
@@ -1007,56 +995,44 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func loopStats(oneDayGlucose: Double) async -> LoopCycles {
-        let requestLSR = LoopStatRecord.fetchRequest() as NSFetchRequest<LoopStatRecord>
-        requestLSR.predicate = NSPredicate(
-            format: "interval > 0 AND start > %@",
-            Date().addingTimeInterval(-24.hours.timeInterval) as NSDate
-        )
-        let sortLSR = NSSortDescriptor(key: "start", ascending: false)
-        requestLSR.sortDescriptors = [sortLSR]
+        do {
+            let lsr = try await LoopStatStore.forCycleStats(since: Date().addingTimeInterval(-24.hours.timeInterval))
 
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "loopStats"
-        return await context.perform {
-            do {
-                let lsr = try context.fetch(requestLSR)
+            // Compute LoopStats for 24 hours
+            let oneDayLoops = loops(lsr)
 
-                // Compute LoopStats for 24 hours
-                let oneDayLoops = self.loops(lsr)
-
-                return LoopCycles(
-                    loops: oneDayLoops.loops,
-                    errors: oneDayLoops.errors,
-                    readings: Int(oneDayGlucose),
-                    success_rate: oneDayLoops.success_rate,
-                    avg_interval: oneDayLoops.avg_interval,
-                    median_interval: oneDayLoops.median_interval,
-                    min_interval: oneDayLoops.min_interval,
-                    max_interval: oneDayLoops.max_interval,
-                    avg_duration: oneDayLoops.avg_duration,
-                    median_duration: oneDayLoops.median_duration,
-                    min_duration: oneDayLoops.max_duration,
-                    max_duration: oneDayLoops.max_duration
-                )
-            } catch {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to get Loop statistics for Statistics Upload"
-                )
-                return LoopCycles(
-                    loops: 0,
-                    errors: 0,
-                    readings: 0,
-                    success_rate: 0,
-                    avg_interval: 0,
-                    median_interval: 0,
-                    min_interval: 0,
-                    max_interval: 0,
-                    avg_duration: 0,
-                    median_duration: 0,
-                    min_duration: 0,
-                    max_duration: 0
-                )
-            }
+            return LoopCycles(
+                loops: oneDayLoops.loops,
+                errors: oneDayLoops.errors,
+                readings: Int(oneDayGlucose),
+                success_rate: oneDayLoops.success_rate,
+                avg_interval: oneDayLoops.avg_interval,
+                median_interval: oneDayLoops.median_interval,
+                min_interval: oneDayLoops.min_interval,
+                max_interval: oneDayLoops.max_interval,
+                avg_duration: oneDayLoops.avg_duration,
+                median_duration: oneDayLoops.median_duration,
+                min_duration: oneDayLoops.max_duration,
+                max_duration: oneDayLoops.max_duration
+            )
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to get Loop statistics for Statistics Upload"
+            )
+            return LoopCycles(
+                loops: 0,
+                errors: 0,
+                readings: 0,
+                success_rate: 0,
+                avg_interval: 0,
+                median_interval: 0,
+                min_interval: 0,
+                max_interval: 0,
+                avg_duration: 0,
+                median_duration: 0,
+                min_duration: 0,
+                max_duration: 0
+            )
         }
     }
 
@@ -1220,21 +1196,19 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func loopStats(loopStatRecord: LoopStats) {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "loopStats.save"
-        context.perform {
-            let nLS = LoopStatRecord(context: context)
-            nLS.start = loopStatRecord.start
-            nLS.end = loopStatRecord.end ?? Date()
-            nLS.loopStatus = loopStatRecord.loopStatus
-            nLS.duration = loopStatRecord.duration ?? 0.0
-            nLS.interval = loopStatRecord.interval ?? 0.0
-
+        let stat = LoopStat(
+            id: nil,
+            start: loopStatRecord.start,
+            end: loopStatRecord.end ?? Date(),
+            loopStatus: loopStatRecord.loopStatus,
+            duration: loopStatRecord.duration ?? 0.0,
+            interval: loopStatRecord.interval ?? 0.0
+        )
+        Task {
             do {
-                guard context.hasChanges else { return }
-                try context.save()
+                try await LoopStatStore.save(stat)
             } catch {
-                print(error.localizedDescription)
+                debug(.apsManager, "Failed to save loop stat: \(error)")
             }
         }
     }
