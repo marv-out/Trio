@@ -58,9 +58,23 @@ path (loop statistics only). Touched:
 
 The Core Data `LoopStatRecord` entity is still in the model (read-only, migration source).
 
+### ✅ Step 2 — `StatsData` (removed, not migrated)
+
+Investigation found `StatsData` to be a dead legacy entity: no write site anywhere
+(it was part of the old "Stats Upload", scrubbed long ago) and its only reader,
+`APSManager.lastLoopForStats()`, had no callers. Rather than port dead code to GRDB,
+it was deleted:
+
+- Removed `APSManager.lastLoopForStats()` (dead).
+- Removed the `StatsData` entity from the Core Data model (19 → 18 entities).
+- The generated `StatsData+CoreDataClass/Properties.swift` are removed from the Trio
+  target in Xcode.
+
+Lightweight migration drops the now-empty `ZSTATSDATA` table on existing installs.
+
 ### ⏳ Next steps (proposed order, lowest risk first)
 
-1. `StatsData`, `TDDStored` — reporting/aggregate data, no dosing impact.
+1. `TDDStored` — reporting/aggregate data, no dosing impact.
 2. `OpenAPS_Battery`, `ContactImageEntryStored`, `MealPresetStored` — standalone, no relationships.
 3. `OverrideStored`/`OverrideRunStored`, `TempTargetStored`/`TempTargetRunStored` — has relationships + presets.
 4. `CarbEntryStored`, `DeletedGlucoseStored`.

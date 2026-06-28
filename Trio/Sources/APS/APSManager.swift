@@ -976,24 +976,6 @@ final class BaseAPSManager: APSManager, Injectable {
         return glucoseResults
     }
 
-    private func lastLoopForStats() async -> Date? {
-        let requestStats = StatsData.fetchRequest() as NSFetchRequest<StatsData>
-        let sortStats = NSSortDescriptor(key: "lastrun", ascending: false)
-        requestStats.sortDescriptors = [sortStats]
-        requestStats.fetchLimit = 1
-
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "lastLoopForStats"
-        return await context.perform {
-            do {
-                return try context.fetch(requestStats).first?.lastrun
-            } catch {
-                print(error.localizedDescription)
-                return .distantPast
-            }
-        }
-    }
-
     private func loopStats(oneDayGlucose: Double) async -> LoopCycles {
         do {
             let lsr = try await LoopStatStore.forCycleStats(since: Date().addingTimeInterval(-24.hours.timeInterval))

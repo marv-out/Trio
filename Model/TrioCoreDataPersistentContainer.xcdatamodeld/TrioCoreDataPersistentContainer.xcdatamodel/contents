@@ -221,9 +221,6 @@
             </uniquenessConstraint>
         </uniquenessConstraints>
     </entity>
-    <entity name="StatsData" representedClassName="StatsData" syncable="YES">
-        <attribute name="lastrun" attributeType="Date" defaultDateTimeInterval="704497620" usesScalarValueType="NO"/>
-    </entity>
     <entity name="TDDStored" representedClassName="TDDStored" syncable="YES">
         <attribute name="bolus" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
         <attribute name="date" optional="YES" attributeType="Date" usesScalarValueType="NO"/>

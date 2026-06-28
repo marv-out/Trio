@@ -786,8 +786,6 @@
 		DDE1795B2C910127003CDDB7 /* CarbEntryStored+CoreDataProperties.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE1793B2C910127003CDDB7 /* CarbEntryStored+CoreDataProperties.swift */; };
 		DDE1795E2C910127003CDDB7 /* PumpEventStored+CoreDataClass.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE1793E2C910127003CDDB7 /* PumpEventStored+CoreDataClass.swift */; };
 		DDE1795F2C910127003CDDB7 /* PumpEventStored+CoreDataProperties.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE1793F2C910127003CDDB7 /* PumpEventStored+CoreDataProperties.swift */; };
-		DDE179602C910127003CDDB7 /* StatsData+CoreDataClass.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE179402C910127003CDDB7 /* StatsData+CoreDataClass.swift */; };
-		DDE179612C910127003CDDB7 /* StatsData+CoreDataProperties.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE179412C910127003CDDB7 /* StatsData+CoreDataProperties.swift */; };
 		DDE179622C910127003CDDB7 /* Forecast+CoreDataClass.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE179422C910127003CDDB7 /* Forecast+CoreDataClass.swift */; };
 		DDE179632C910127003CDDB7 /* Forecast+CoreDataProperties.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE179432C910127003CDDB7 /* Forecast+CoreDataProperties.swift */; };
 		DDE179662C910127003CDDB7 /* OpenAPS_Battery+CoreDataClass.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE179462C910127003CDDB7 /* OpenAPS_Battery+CoreDataClass.swift */; };
@@ -1735,8 +1733,6 @@
 		DDE1793B2C910127003CDDB7 /* CarbEntryStored+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CarbEntryStored+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		DDE1793E2C910127003CDDB7 /* PumpEventStored+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PumpEventStored+CoreDataClass.swift"; sourceTree = "<group>"; };
 		DDE1793F2C910127003CDDB7 /* PumpEventStored+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PumpEventStored+CoreDataProperties.swift"; sourceTree = "<group>"; };
-		DDE179402C910127003CDDB7 /* StatsData+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StatsData+CoreDataClass.swift"; sourceTree = "<group>"; };
-		DDE179412C910127003CDDB7 /* StatsData+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StatsData+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		DDE179422C910127003CDDB7 /* Forecast+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Forecast+CoreDataClass.swift"; sourceTree = "<group>"; };
 		DDE179432C910127003CDDB7 /* Forecast+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Forecast+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		DDE179462C910127003CDDB7 /* OpenAPS_Battery+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpenAPS_Battery+CoreDataClass.swift"; sourceTree = "<group>"; };
@@ -4115,8 +4111,6 @@
 				DDE179512C910127003CDDB7 /* OverrideStored+CoreDataProperties.swift */,
 				DDE1793E2C910127003CDDB7 /* PumpEventStored+CoreDataClass.swift */,
 				DDE1793F2C910127003CDDB7 /* PumpEventStored+CoreDataProperties.swift */,
-				DDE179402C910127003CDDB7 /* StatsData+CoreDataClass.swift */,
-				DDE179412C910127003CDDB7 /* StatsData+CoreDataProperties.swift */,
 				DDE179482C910127003CDDB7 /* TempBasalStored+CoreDataClass.swift */,
 				DDE179492C910127003CDDB7 /* TempBasalStored+CoreDataProperties.swift */,
 				491D6FB92D56741C00C49F67 /* TempTargetRunStored+CoreDataClass.swift */,
@@ -5284,10 +5278,8 @@
 				3BBB76AA2E01C70B0040977D /* MealCob.swift in Sources */,
 				BDDAF9EF2D00554500B34E7A /* SelectionPopoverView.swift in Sources */,
 				DDE1795F2C910127003CDDB7 /* PumpEventStored+CoreDataProperties.swift in Sources */,
-				DDE179602C910127003CDDB7 /* StatsData+CoreDataClass.swift in Sources */,
 				DD30BA0E2E07700000DA677C /* Profile+Autosens.swift in Sources */,
 				DD3F1F852D9DD84000DCE7B3 /* DeliveryLimitsStepView.swift in Sources */,
-				DDE179612C910127003CDDB7 /* StatsData+CoreDataProperties.swift in Sources */,
 				DDE179622C910127003CDDB7 /* Forecast+CoreDataClass.swift in Sources */,
 				DDE179632C910127003CDDB7 /* Forecast+CoreDataProperties.swift in Sources */,
 				BDC531142D10611D00088832 /* AddContactImageSheet.swift in Sources */,
