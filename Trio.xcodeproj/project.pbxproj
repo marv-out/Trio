@@ -413,6 +413,11 @@
 		BA00D96F7B2FF169A06FB530 /* CGMSettingsStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C018D1680307A31C9ED7120 /* CGMSettingsStateModel.swift */; };
 		BB5227A51D9D4377A1A70BA6 /* TempTargetData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B8F3B0E159844FD8746DFC0 /* TempTargetData.swift */; };
 		BD00EE1A2FF144C5005D482C /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BD00EE192FF144C5005D482C /* GRDB */; };
+		BD00EE202FF14764005D482C /* MIGRATION.md in Resources */ = {isa = PBXBuildFile; fileRef = BD00EE1F2FF14764005D482C /* MIGRATION.md */; };
+		BD00EE212FF14764005D482C /* GRDBStack.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE1C2FF14764005D482C /* GRDBStack.swift */; };
+		BD00EE222FF14764005D482C /* GRDBMigrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE1B2FF14764005D482C /* GRDBMigrations.swift */; };
+		BD00EE232FF14764005D482C /* LoopStat.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE1D2FF14764005D482C /* LoopStat.swift */; };
+		BD00EE242FF14764005D482C /* LoopStatMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE1E2FF14764005D482C /* LoopStatMigration.swift */; };
 		BD04ECCE2D29952A008C5FEB /* BolusProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */; };
 		BD0B2EF32C5998E600B3298F /* MealPresetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD0B2EF22C5998E600B3298F /* MealPresetView.swift */; };
 		BD10516D2DA986E1007C6D89 /* PulsingLogoAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD10516C2DA986DC007C6D89 /* PulsingLogoAnimation.swift */; };
@@ -1356,6 +1361,11 @@
 		B6E925122EB3932A0076D719 /* OmnipodKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = OmnipodKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		B9B5C0607505A38F256BF99A /* CGMSettingsDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CGMSettingsDataFlow.swift; sourceTree = "<group>"; };
 		BA49538D56989D8DA6FCF538 /* TargetsEditorDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TargetsEditorDataFlow.swift; sourceTree = "<group>"; };
+		BD00EE1B2FF14764005D482C /* GRDBMigrations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GRDBMigrations.swift; sourceTree = "<group>"; };
+		BD00EE1C2FF14764005D482C /* GRDBStack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GRDBStack.swift; sourceTree = "<group>"; };
+		BD00EE1D2FF14764005D482C /* LoopStat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopStat.swift; sourceTree = "<group>"; };
+		BD00EE1E2FF14764005D482C /* LoopStatMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopStatMigration.swift; sourceTree = "<group>"; };
+		BD00EE1F2FF14764005D482C /* MIGRATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MIGRATION.md; sourceTree = "<group>"; };
 		BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressOverlay.swift; sourceTree = "<group>"; };
 		BD0B2EF22C5998E600B3298F /* MealPresetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetView.swift; sourceTree = "<group>"; };
 		BD10516C2DA986DC007C6D89 /* PulsingLogoAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulsingLogoAnimation.swift; sourceTree = "<group>"; };
@@ -3122,6 +3132,11 @@
 		587A54C82BCDCE0F009D38E2 /* Model */ = {
 			isa = PBXGroup;
 			children = (
+				BD00EE1B2FF14764005D482C /* GRDBMigrations.swift */,
+				BD00EE1C2FF14764005D482C /* GRDBStack.swift */,
+				BD00EE1D2FF14764005D482C /* LoopStat.swift */,
+				BD00EE1E2FF14764005D482C /* LoopStatMigration.swift */,
+				BD00EE1F2FF14764005D482C /* MIGRATION.md */,
 				BD136FAD2F6AC555002217F9 /* NSFetchedResultsControllerDelegate.swift */,
 				3BAD36CB2D7D420500CC298D /* CoreDataInitializationCoordinator.swift */,
 				BDF34F8F2C10CF8C00D51995 /* CoreDataStack.swift */,
@@ -4511,6 +4526,7 @@
 				8A91342C2D63D9A2007F8874 /* InfoPlist.xcstrings in Resources */,
 				CE1F6DE72BAF1A180064EB8D /* BuildDetails.plist in Resources */,
 				3B3B57C92DA07B3400849D16 /* GoogleService-Info.plist in Resources */,
+				BD00EE202FF14764005D482C /* MIGRATION.md in Resources */,
 				38DF178D27733E6800B3528F /* snow.sks in Resources */,
 				388E597225AD9CF10019842D /* json in Resources */,
 				38DF178E27733E6800B3528F /* Assets.xcassets in Resources */,
@@ -5018,6 +5034,10 @@
 				DD17452E2C55AE4800211FAC /* TargetBehavoirDataFlow.swift in Sources */,
 				DD906BF62EA6AAE900262772 /* BaseNightscoutManager+Subscribers.swift in Sources */,
 				53F2382465BF74DB1A967C8B /* PumpConfigProvider.swift in Sources */,
+				BD00EE212FF14764005D482C /* GRDBStack.swift in Sources */,
+				BD00EE222FF14764005D482C /* GRDBMigrations.swift in Sources */,
+				BD00EE232FF14764005D482C /* LoopStat.swift in Sources */,
+				BD00EE242FF14764005D482C /* LoopStatMigration.swift in Sources */,
 				5D16287A969E64D18CE40E44 /* PumpConfigStateModel.swift in Sources */,
 				DDF6902C2DA028D3008BF16C /* DiagnosticsStepView.swift in Sources */,
 				C2BA6B992F758E7600348E6A /* NotificationIdentifiers.swift in Sources */,

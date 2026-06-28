@@ -1,6 +1,5 @@
 import Foundation
 import GRDB
-import OSLog
 
 /// Central access point for Trio's GRDB-backed SQLite store.
 ///
@@ -22,7 +21,6 @@ final class GRDBStack {
     private(set) var dbPool: DatabasePool?
 
     private let inMemory: Bool
-    private static let log = Logger(subsystem: "Trio", category: "GRDBStack")
 
     private init(inMemory: Bool = false) {
         self.inMemory = inMemory
@@ -48,7 +46,7 @@ final class GRDBStack {
         let pool = try Self.makePool(inMemory: inMemory)
         try Self.migrator.migrate(pool)
         dbPool = pool
-        Self.log.debug("GRDB stack initialized at \(Self.databaseURL().path, privacy: .public)")
+        debug(.coreData, "GRDB stack initialized at \(Self.databaseURL().path)")
 
         // One-time Core Data → GRDB data migrations for already-moved entities.
         try await LoopStatMigration.migrateIfNeeded(into: self)
@@ -61,7 +59,7 @@ final class GRDBStack {
         // Keep SQL out of logs in production; flip on for local debugging.
         config.prepareDatabase { db in
             #if DEBUG
-                db.trace { Self.log.debug("SQL: \($0.description, privacy: .public)") }
+                db.trace { debug(.coreData, "SQL: \($0.description)") }
             #endif
         }
 

@@ -1,7 +1,6 @@
 import CoreData
 import Foundation
 import GRDB
-import OSLog
 
 /// One-time copy of `LoopStatRecord` rows from the Core Data store into GRDB.
 ///
@@ -11,7 +10,6 @@ import OSLog
 /// migration is proven in the field.
 enum LoopStatMigration {
     private static let didMigrateKey = "grdb.didMigrateLoopStats"
-    private static let log = Logger(subsystem: "Trio", category: "LoopStatMigration")
 
     static func migrateIfNeeded(into stack: GRDBStack) async throws {
         guard !UserDefaults.standard.bool(forKey: didMigrateKey) else { return }
@@ -28,7 +26,7 @@ enum LoopStatMigration {
         let legacy = try await readLegacyRecords()
         guard !legacy.isEmpty else {
             UserDefaults.standard.set(true, forKey: didMigrateKey)
-            log.debug("No legacy LoopStatRecord rows to migrate.")
+            debug(.coreData, "No legacy LoopStatRecord rows to migrate.")
             return
         }
 
@@ -40,7 +38,7 @@ enum LoopStatMigration {
         }
 
         UserDefaults.standard.set(true, forKey: didMigrateKey)
-        log.debug("Migrated \(legacy.count, privacy: .public) LoopStatRecord rows into GRDB.")
+        debug(.coreData, "Migrated \(legacy.count) LoopStatRecord rows into GRDB.")
     }
 
     /// Reads all `LoopStatRecord` rows from Core Data and maps them to `LoopStat` values.
