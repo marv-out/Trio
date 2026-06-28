@@ -51,6 +51,7 @@ final class GRDBStack {
         // One-time Core Data → GRDB data migrations for already-moved entities.
         try await LoopStatMigration.migrateIfNeeded(into: self)
         try await TDDMigration.migrateIfNeeded(into: self)
+        try await ContactImageMigration.migrateIfNeeded(into: self)
     }
 
     // MARK: - Connection

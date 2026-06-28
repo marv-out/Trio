@@ -1,4 +1,3 @@
-import CoreData
 import Foundation
 import SwiftUI
 import Swinject
@@ -7,62 +6,40 @@ protocol ContactImageStorage {
     func fetchContactImageEntries() async -> [ContactImageEntry]
     func storeContactImageEntry(_ entry: ContactImageEntry) async
     func updateContactImageEntry(_ contactImageEntry: ContactImageEntry) async
-    func deleteContactImageEntry(_ objectID: NSManagedObjectID) async
+    func deleteContactImageEntry(_ storedID: Int64) async
 }
 
 final class BaseContactImageStorage: ContactImageStorage, Injectable {
     @Injected() private var settingsManager: SettingsManager!
 
-    private let makeContext: () -> NSManagedObjectContext
-
-    init(resolver: Resolver, contextProvider: (() -> NSManagedObjectContext)? = nil) {
-        makeContext = contextProvider ?? { CoreDataStack.shared.newTaskContext() }
+    init(resolver: Resolver) {
         injectServices(resolver)
     }
 
-    /// Fetches all stored Contact Trick entries.
-    ///
-    /// The method retrieves `ContactImageEntryStored` objects from Core Data, maps them to
-    /// `ContactImageEntry` objects, and returns the results.
-    ///
-    /// - Returns: An array of `ContactImageEntry` objects.
+    /// Fetches all stored contact-image entries (GRDB), mapped to the `ContactImageEntry`
+    /// domain model. High-contrast entries first, as before.
     func fetchContactImageEntries() async -> [ContactImageEntry] {
-        let context = makeContext()
-        context.name = "fetchContactImageEntries"
         do {
-            let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-                ofType: ContactImageEntryStored.self,
-                onContext: context,
-                predicate: NSPredicate.all,
-                key: "hasHighContrast",
-                ascending: false
-            )
-
-            return try await context.perform {
-                guard let fetchedContactImageEntries = results as? [ContactImageEntryStored]
-                else { throw CoreDataError.fetchError(function: #function, file: #file)
-                }
-
-                return fetchedContactImageEntries.compactMap { entry in
-                    ContactImageEntry(
-                        name: entry.name ?? String(localized: "No name provided"),
-                        layout: ContactImageLayout(rawValue: entry.layout ?? "Default") ?? .default,
-                        ring: ContactImageLargeRing(rawValue: entry.ring ?? "Hidden") ?? .none,
-                        primary: ContactImageValue(rawValue: entry.primary ?? "Glucose Reading") ?? .glucose,
-                        top: ContactImageValue(rawValue: entry.top ?? "None") ?? .none,
-                        bottom: ContactImageValue(rawValue: entry.bottom ?? "None") ?? .none,
-                        contactId: entry.contactId?.string,
-                        hasHighContrast: entry.hasHighContrast,
-                        ringWidth: ContactImageEntry.RingWidth(rawValue: Int(entry.ringWidth)) ?? .regular,
-                        ringGap: ContactImageEntry.RingGap(rawValue: Int(entry.ringGap)) ?? .small,
-                        colorMode: ContactImageEntry.ColorMode(rawValue: entry.colorMode ?? "Color") ?? .color,
-                        fontSize: ContactImageEntry.FontSize(rawValue: Int(entry.fontSize)) ?? .regular,
-                        secondaryFontSize: ContactImageEntry.FontSize(rawValue: Int(entry.fontSizeSecondary)) ?? .small,
-                        fontWeight: Font.Weight.fromString(entry.fontWeight ?? "regular"),
-                        fontWidth: Font.Width.fromString(entry.fontWidth ?? "standard"),
-                        managedObjectID: entry.objectID
-                    )
-                }
+            let records = try await ContactImageStore.fetchAll()
+            return records.map { record in
+                ContactImageEntry(
+                    name: record.name ?? String(localized: "No name provided"),
+                    layout: ContactImageLayout(rawValue: record.layout ?? "Default") ?? .default,
+                    ring: ContactImageLargeRing(rawValue: record.ring ?? "Hidden") ?? .none,
+                    primary: ContactImageValue(rawValue: record.primary ?? "Glucose Reading") ?? .glucose,
+                    top: ContactImageValue(rawValue: record.top ?? "None") ?? .none,
+                    bottom: ContactImageValue(rawValue: record.bottom ?? "None") ?? .none,
+                    contactId: record.contactId,
+                    hasHighContrast: record.hasHighContrast ?? false,
+                    ringWidth: ContactImageEntry.RingWidth(rawValue: Int(record.ringWidth ?? 0)) ?? .regular,
+                    ringGap: ContactImageEntry.RingGap(rawValue: Int(record.ringGap ?? 0)) ?? .small,
+                    colorMode: ContactImageEntry.ColorMode(rawValue: record.colorMode ?? "Color") ?? .color,
+                    fontSize: ContactImageEntry.FontSize(rawValue: Int(record.fontSize ?? 0)) ?? .regular,
+                    secondaryFontSize: ContactImageEntry.FontSize(rawValue: Int(record.fontSizeSecondary ?? 0)) ?? .small,
+                    fontWeight: Font.Weight.fromString(record.fontWeight ?? "regular"),
+                    fontWidth: Font.Width.fromString(record.fontWidth ?? "standard"),
+                    storedID: record.pk
+                )
             }
         } catch {
             debug(.default, "\(DebuggingIdentifiers.failed) Error fetching contact image entries: \(error)")
@@ -70,98 +47,60 @@ final class BaseContactImageStorage: ContactImageStorage, Injectable {
         }
     }
 
-    /// Stores a new Contact Trick entry.
-    ///
-    /// This method creates a new `ContactImageEntryStored` object in the background context,
-    /// populates its properties with the values from the provided `ContactImageEntry`, and
-    /// saves the context if changes exist.
-    ///
-    /// - Parameter contactImageEntry: The `ContactImageEntry` object to be stored.
+    /// Stores a new contact-image entry.
     func storeContactImageEntry(_ contactImageEntry: ContactImageEntry) async {
-        let context = makeContext()
-        context.name = "storeContactImageEntry"
-        await context.perform {
-            let newContactImageEntry = ContactImageEntryStored(context: context)
-
-            newContactImageEntry.id = UUID()
-            newContactImageEntry.name = contactImageEntry.name
-            newContactImageEntry.contactId = contactImageEntry.contactId
-            newContactImageEntry.layout = contactImageEntry.layout.rawValue
-            newContactImageEntry.ring = contactImageEntry.ring.rawValue
-            newContactImageEntry.primary = contactImageEntry.primary.rawValue
-            newContactImageEntry.top = contactImageEntry.top.rawValue
-            newContactImageEntry.bottom = contactImageEntry.bottom.rawValue
-            newContactImageEntry.hasHighContrast = contactImageEntry.hasHighContrast
-            newContactImageEntry.ringWidth = Int16(contactImageEntry.ringWidth.rawValue)
-            newContactImageEntry.ringGap = Int16(contactImageEntry.ringGap.rawValue)
-            newContactImageEntry.colorMode = contactImageEntry.colorMode.rawValue
-            newContactImageEntry.fontSize = Int16(contactImageEntry.fontSize.rawValue)
-            newContactImageEntry.fontSizeSecondary = Int16(contactImageEntry.secondaryFontSize.rawValue)
-            newContactImageEntry.fontWidth = contactImageEntry.fontWidth.asString
-            newContactImageEntry.fontWeight = contactImageEntry.fontWeight.asString
-
-            do {
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save Contact Trick Entry to Core Data with error: \(error.userInfo)"
-                )
-            }
+        let record = makeRecord(from: contactImageEntry, id: UUID())
+        do {
+            try await ContactImageStore.insert(record)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save Contact Image Entry: \(error)"
+            )
         }
     }
 
-    /// Updates an existing Contact Trick entry in Core Data.
-    ///
-    /// This method finds the existing `ContactImageEntryStored` object by its `contactId` and updates
-    /// its properties with the values from the provided `ContactImageEntry`. If no matching entry exists,
-    /// it does nothing.
-    ///
-    /// - Parameter contactImageEntry: The `ContactImageEntry` object with updated values.
+    /// Updates the entry matching `contactId` in place; no-op if none exists.
     func updateContactImageEntry(_ contactImageEntry: ContactImageEntry) async {
-        let context = makeContext()
-        context.name = "updateContactImageEntry"
-        await context.perform {
-            let fetchRequest: NSFetchRequest<ContactImageEntryStored> = ContactImageEntryStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "contactId == %@", contactImageEntry.contactId ?? "")
-
-            do {
-                if let existingEntry = try context.fetch(fetchRequest).first {
-                    // Update the properties of the existing entry
-                    existingEntry.name = contactImageEntry.name
-                    existingEntry.layout = contactImageEntry.layout.rawValue
-                    existingEntry.ring = contactImageEntry.ring.rawValue
-                    existingEntry.primary = contactImageEntry.primary.rawValue
-                    existingEntry.top = contactImageEntry.top.rawValue
-                    existingEntry.bottom = contactImageEntry.bottom.rawValue
-                    existingEntry.hasHighContrast = contactImageEntry.hasHighContrast
-                    existingEntry.ringWidth = Int16(contactImageEntry.ringWidth.rawValue)
-                    existingEntry.ringGap = Int16(contactImageEntry.ringGap.rawValue)
-                    existingEntry.colorMode = contactImageEntry.colorMode.rawValue
-                    existingEntry.fontSize = Int16(contactImageEntry.fontSize.rawValue)
-                    existingEntry.fontSizeSecondary = Int16(contactImageEntry.secondaryFontSize.rawValue)
-                    existingEntry.fontWeight = contactImageEntry.fontWeight.asString
-                    existingEntry.fontWidth = contactImageEntry.fontWidth.asString
-
-                    guard context.hasChanges else { return }
-                    try context.save()
-                } else {
-                    debugPrint(
-                        "\(DebuggingIdentifiers.failed) \(#file) \(#function) No matching Contact Trick Entry found to update."
-                    )
-                }
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update Contact Trick Entry with error: \(error.userInfo)"
-                )
-            }
+        // id/pk are preserved by the store; pass nil id here.
+        let record = makeRecord(from: contactImageEntry, id: nil)
+        do {
+            try await ContactImageStore.updateByContactId(record)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update Contact Image Entry: \(error)"
+            )
         }
     }
 
-    /// Deletes a Contact Trick entry from Core Data.
-    ///
-    /// - Parameter objectID: The `NSManagedObjectID` of the object to delete.
-    func deleteContactImageEntry(_ objectID: NSManagedObjectID) async {
-        await CoreDataStack.shared.deleteObject(identifiedBy: objectID)
+    /// Deletes a contact-image entry by its GRDB row id.
+    func deleteContactImageEntry(_ storedID: Int64) async {
+        do {
+            try await ContactImageStore.delete(pk: storedID)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to delete Contact Image Entry: \(error)"
+            )
+        }
+    }
+
+    private func makeRecord(from entry: ContactImageEntry, id: UUID?) -> ContactImageRecord {
+        ContactImageRecord(
+            id: id,
+            name: entry.name,
+            contactId: entry.contactId,
+            layout: entry.layout.rawValue,
+            ring: entry.ring.rawValue,
+            primary: entry.primary.rawValue,
+            top: entry.top.rawValue,
+            bottom: entry.bottom.rawValue,
+            hasHighContrast: entry.hasHighContrast,
+            ringWidth: Int16(entry.ringWidth.rawValue),
+            ringGap: Int16(entry.ringGap.rawValue),
+            colorMode: entry.colorMode.rawValue,
+            fontSize: Int16(entry.fontSize.rawValue),
+            fontSizeSecondary: Int16(entry.secondaryFontSize.rawValue),
+            fontWeight: entry.fontWeight.asString,
+            fontWidth: entry.fontWidth.asString
+        )
     }
 }

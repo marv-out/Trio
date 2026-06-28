@@ -51,6 +51,31 @@ extension GRDBStack {
             try db.create(index: "tddStored_on_date", on: "tddStored", columns: ["date"])
         }
 
+        // v3 — ContactImageEntryStored. Standalone, no relationships; all String/Int16/Bool/UUID.
+        migrator.registerMigration("v3_contactImageEntryStored") { db in
+            try db.create(table: "contactImageEntryStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID
+                t.column("name", .text)
+                t.column("contactId", .text)
+                t.column("layout", .text)
+                t.column("ring", .text)
+                t.column("primary", .text)
+                t.column("top", .text)
+                t.column("bottom", .text)
+                t.column("hasHighContrast", .boolean)
+                t.column("ringWidth", .integer)
+                t.column("ringGap", .integer)
+                t.column("colorMode", .text)
+                t.column("fontSize", .integer)
+                t.column("fontSizeSecondary", .integer)
+                t.column("fontWeight", .text)
+                t.column("fontWidth", .text)
+            }
+            // Update/lookup is by contactId.
+            try db.create(index: "contactImageEntryStored_on_contactId", on: "contactImageEntryStored", columns: ["contactId"])
+        }
+
         return migrator
     }
 }

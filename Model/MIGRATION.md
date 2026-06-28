@@ -95,9 +95,25 @@ reactive consumer (the Home header shows the current TDD live). Touched:
 
 The Core Data `TDDStored` entity stays in the model (read-only, migration source).
 
+### ✅ Step 4 — `ContactImageEntryStored` (done, this branch)
+
+Standalone contact-image config; no live UI (no FRC/@FetchRequest). 16 attributes, all
+String/Int16/Bool/UUID — so `ContactImageRecord` is a plain `Codable` GRDB record. Touched:
+
+- `ContactImageRecord` + `ContactImageStore` (fetchAll, insert, updateByContactId, delete).
+- `ContactImageStorage`: all four CRUD methods → `ContactImageStore`; mapping to/from the
+  `ContactImageEntry` domain model unchanged.
+- Domain model `ContactImageEntry.managedObjectID: NSManagedObjectID?` → `storedID: Int64?`
+  (GRDB row id); delete call sites in `ContactImageStateModel` updated.
+- v3 schema migration; one-time `ContactImageMigration` data copy.
+
+The Core Data `ContactImageEntryStored` entity (codeGenerationType="class") stays as the
+read-only migration source.
+
 ### ⏳ Next steps (proposed order, lowest risk first)
 
-1. `OpenAPS_Battery`, `ContactImageEntryStored`, `MealPresetStored` — standalone, no relationships.
+1. `OpenAPS_Battery` (FRC → ValueObservation; upsert; full-wipe + 90-day cleanup deletes) and
+   `MealPresetStored` (SwiftUI `@FetchRequest` → observation) — both have live UI.
 2. `OverrideStored`/`OverrideRunStored`, `TempTargetStored`/`TempTargetRunStored` — has relationships + presets.
 3. `CarbEntryStored`, `DeletedGlucoseStored`.
 4. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.

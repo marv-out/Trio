@@ -1,4 +1,3 @@
-import CoreData
 import SwiftUI
 
 struct ContactImageEntry: Hashable, Equatable, Sendable {
@@ -18,7 +17,9 @@ struct ContactImageEntry: Hashable, Equatable, Sendable {
     var secondaryFontSize: FontSize = .small
     var fontWeight: Font.Weight = .medium
     var fontWidth: Font.Width = .standard
-    var managedObjectID: NSManagedObjectID?
+    /// GRDB row id of the persisted record (nil for unsaved entries). Replaces the former
+    /// Core Data `NSManagedObjectID`.
+    var storedID: Int64?
 
     static func == (lhs: ContactImageEntry, rhs: ContactImageEntry) -> Bool {
         lhs.id == rhs.id &&

@@ -62,9 +62,9 @@ extension ContactImage {
                     if exists {
                         validated.append(entry)
                     } else {
-                        // Contact was deleted in iOS, remove from Core Data
-                        if let objectID = entry.managedObjectID {
-                            await contactImageStorage.deleteContactImageEntry(objectID)
+                        // Contact was deleted in iOS, remove from the store
+                        if let storedID = entry.storedID {
+                            await contactImageStorage.deleteContactImageEntry(storedID)
                             debugPrint("Removed orphaned contact entry: \(entry.name)")
                         }
                     }
@@ -128,16 +128,15 @@ extension ContactImage {
                 debugPrint("\(DebuggingIdentifiers.failed) Failed to delete contact from Apple Contacts. Check if it exists.")
             }
 
-            // 2. Delete the entry from Core Data.
-            if let objectID = entry.managedObjectID {
-                await deleteContactImage(objectID: objectID)
+            // 2. Delete the entry from the store.
+            if let storedID = entry.storedID {
+                await deleteContactImage(storedID: storedID)
             }
         }
 
-        /// Deletes a Core Data entry.
-        /// - Parameter objectID: The Managed Object ID of the entry to be deleted.
-        func deleteContactImage(objectID: NSManagedObjectID) async {
-            await contactImageStorage.deleteContactImageEntry(objectID)
+        /// Deletes a stored contact-image entry by its GRDB row id.
+        func deleteContactImage(storedID: Int64) async {
+            await contactImageStorage.deleteContactImageEntry(storedID)
             await fetchContactImageEntriesAndUpdateUI()
         }
 
