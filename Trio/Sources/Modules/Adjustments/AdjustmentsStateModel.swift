@@ -29,7 +29,7 @@ extension Adjustments {
         var id = ""
         var overrideName: String = ""
         var isPreset: Bool = false
-        var overridePresets: [OverrideStored] = []
+        var overridePresets: [OverrideRecord] = []
         var advancedSettings: Bool = false
         var isfAndCr: Bool = true
         var isf: Bool = true
@@ -43,7 +43,7 @@ extension Adjustments {
         var defaultUamMinutes: Decimal = 0
         var selectedTab: Tab = .overrides
         var activeOverrideName: String = ""
-        var currentActiveOverride: OverrideStored?
+        var currentActiveOverride: OverrideRecord?
         var activeTempTargetName: String = ""
 
         var currentActiveTempTarget: TempTargetStored?
@@ -173,13 +173,10 @@ extension Adjustments {
         /// Reorders Override Presets and updates the view.
         func reorderOverride(from source: IndexSet, to destination: Int) {
             overridePresets.move(fromOffsets: source, toOffset: destination)
-            for (index, override) in overridePresets.enumerated() {
-                override.orderPosition = Int16(index + 1)
-            }
+            let reordered = overridePresets
             Task {
                 do {
-                    guard viewContext.hasChanges else { return }
-                    try viewContext.save()
+                    try await overrideStorage.reorderPresets(reordered)
                     setupOverridePresetsArray()
                     try await nightscoutManager.uploadProfiles()
                 } catch {

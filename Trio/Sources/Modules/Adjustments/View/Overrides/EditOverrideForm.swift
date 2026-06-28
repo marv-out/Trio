@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 struct EditOverrideForm: View {
-    var override: OverrideStored
+    var override: OverrideRecord
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.colorScheme) var colorScheme
     @Environment(AppState.self) var appState
@@ -36,20 +36,20 @@ struct EditOverrideForm: View {
     @State private var displayPickerDisableSmbSchedule: Bool = false
     @State private var displayPickerSmbMinutes: Bool = false
 
-    init(overrideToEdit: OverrideStored, state: Adjustments.StateModel) {
+    init(overrideToEdit: OverrideRecord, state: Adjustments.StateModel) {
         override = overrideToEdit
         _state = Bindable(wrappedValue: state)
         _name = State(initialValue: overrideToEdit.name ?? "")
         _percentage = State(initialValue: overrideToEdit.percentage)
         _indefinite = State(initialValue: overrideToEdit.indefinite)
-        _duration = State(initialValue: overrideToEdit.duration?.decimalValue ?? 0)
-        _target = State(initialValue: overrideToEdit.target?.decimalValue)
-        _target_override = State(initialValue: overrideToEdit.target != nil && overrideToEdit.target?.decimalValue != 0)
+        _duration = State(initialValue: overrideToEdit.duration ?? 0)
+        _target = State(initialValue: overrideToEdit.target)
+        _target_override = State(initialValue: (overrideToEdit.target ?? 0) != 0)
         _advancedSettings = State(initialValue: overrideToEdit.advancedSettings)
         _smbIsOff = State(initialValue: overrideToEdit.smbIsOff)
         _smbIsScheduledOff = State(initialValue: overrideToEdit.smbIsScheduledOff)
-        _start = State(initialValue: overrideToEdit.start?.decimalValue)
-        _end = State(initialValue: overrideToEdit.end?.decimalValue)
+        _start = State(initialValue: overrideToEdit.start)
+        _end = State(initialValue: overrideToEdit.end)
         _isfAndCr = State(initialValue: overrideToEdit.isfAndCr)
         _isf = State(initialValue: overrideToEdit.isf)
         _cr = State(initialValue: overrideToEdit.cr)
@@ -61,8 +61,8 @@ struct EditOverrideForm: View {
             initialValue: overrideToEdit.smbIsScheduledOff ? .disableOnSchedule
                 : (overrideToEdit.smbIsOff ? .disable : .dontDisable)
         )
-        _smbMinutes = State(initialValue: overrideToEdit.smbMinutes?.decimalValue)
-        _uamMinutes = State(initialValue: overrideToEdit.uamMinutes?.decimalValue)
+        _smbMinutes = State(initialValue: overrideToEdit.smbMinutes)
+        _uamMinutes = State(initialValue: overrideToEdit.uamMinutes)
     }
 
     private var percentageSelection: Binding<Double> {
@@ -511,13 +511,11 @@ struct EditOverrideForm: View {
             },
             content: {
                 Button(action: {
-                    saveChanges()
+                    let updatedOverride = makeUpdatedOverride()
 
                     Task {
                         do {
-                            guard let moc = override.managedObjectContext else { return }
-                            guard moc.hasChanges else { return }
-                            try moc.save()
+                            try await OverrideStore.update(updatedOverride)
 
                             try await state.nightscoutManager.uploadProfiles()
 
@@ -525,7 +523,7 @@ struct EditOverrideForm: View {
                             if let currentActiveOverride = state.currentActiveOverride {
                                 Task {
                                     await state.disableAllActiveOverrides(
-                                        except: currentActiveOverride.objectID,
+                                        except: currentActiveOverride.pk,
                                         createOverrideRunEntry: false
                                     )
                                     // Update View
@@ -575,45 +573,49 @@ struct EditOverrideForm: View {
         return (false, nil)
     }
 
-    private func saveChanges() {
+    /// Builds the updated override record from the form's edited state. The original `override`
+    /// value type is left untouched; the result is persisted via `OverrideStore.update`.
+    private func makeUpdatedOverride() -> OverrideRecord {
+        var updated = override
         if !override.isPreset, hasChanges, name == (override.name ?? "") {
-            override.name = "Custom Override"
+            updated.name = "Custom Override"
         } else {
-            override.name = name
+            updated.name = name
         }
-        override.percentage = percentage
-        override.indefinite = indefinite
-        override.duration = NSDecimalNumber(decimal: duration)
-        override.target = target_override ? NSDecimalNumber(decimal: target ?? 100) : nil
-        override.advancedSettings = advancedSettings
-        override.smbIsOff = smbIsOff
-        override.smbIsScheduledOff = smbIsScheduledOff
-        override.start = start.map { NSDecimalNumber(decimal: $0) }
-        override.end = end.map { NSDecimalNumber(decimal: $0) }
-        override.isfAndCr = isfAndCr
-        override.isf = isf
-        override.cr = cr
-        override.smbMinutes = smbMinutes.map { NSDecimalNumber(decimal: $0) }
-        override.uamMinutes = uamMinutes.map { NSDecimalNumber(decimal: $0) }
-        override.isUploadedToNS = false
+        updated.percentage = percentage
+        updated.indefinite = indefinite
+        updated.duration = duration
+        updated.target = target_override ? (target ?? 100) : nil
+        updated.advancedSettings = advancedSettings
+        updated.smbIsOff = smbIsOff
+        updated.smbIsScheduledOff = smbIsScheduledOff
+        updated.start = start
+        updated.end = end
+        updated.isfAndCr = isfAndCr
+        updated.isf = isf
+        updated.cr = cr
+        updated.smbMinutes = smbMinutes
+        updated.uamMinutes = uamMinutes
+        updated.isUploadedToNS = false
+        return updated
     }
 
     private func resetValues() {
         name = override.name ?? ""
         percentage = override.percentage
         indefinite = override.indefinite
-        duration = override.duration?.decimalValue ?? 0
-        target = override.target?.decimalValue
+        duration = override.duration ?? 0
+        target = override.target
         advancedSettings = override.advancedSettings
         smbIsOff = override.smbIsOff
         smbIsScheduledOff = override.smbIsScheduledOff
-        start = override.start?.decimalValue
-        end = override.end?.decimalValue
+        start = override.start
+        end = override.end
         isfAndCr = override.isfAndCr
         isf = override.isf
         cr = override.cr
-        smbMinutes = override.smbMinutes?.decimalValue ?? state.defaultSmbMinutes
-        uamMinutes = override.uamMinutes?.decimalValue ?? state.defaultUamMinutes
+        smbMinutes = override.smbMinutes ?? state.defaultSmbMinutes
+        uamMinutes = override.uamMinutes ?? state.defaultUamMinutes
     }
 
     private func toggleScrollWheel(_ toggle: Bool) -> Bool {

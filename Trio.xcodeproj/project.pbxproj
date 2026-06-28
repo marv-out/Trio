@@ -426,6 +426,8 @@
 		BD00EE3B2FF14764005D482C /* BatteryMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE3A2FF14764005D482C /* BatteryMigration.swift */; };
 		BD00EE3D2FF14764005D482C /* MealPresetRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE3C2FF14764005D482C /* MealPresetRecord.swift */; };
 		BD00EE3F2FF14764005D482C /* MealPresetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */; };
+		BD00EFD12FF19EFF005D482C /* OverrideRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */; };
+		BD00EFD22FF19EFF005D482C /* OverrideMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */; };
 		BD04ECCE2D29952A008C5FEB /* BolusProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */; };
 		BD0B2EF32C5998E600B3298F /* MealPresetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD0B2EF22C5998E600B3298F /* MealPresetView.swift */; };
 		BD10516D2DA986E1007C6D89 /* PulsingLogoAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD10516C2DA986DC007C6D89 /* PulsingLogoAnimation.swift */; };
@@ -1371,6 +1373,7 @@
 		BD00EE1C2FF14764005D482C /* GRDBStack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GRDBStack.swift; sourceTree = "<group>"; };
 		BD00EE1D2FF14764005D482C /* LoopStat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopStat.swift; sourceTree = "<group>"; };
 		BD00EE1E2FF14764005D482C /* LoopStatMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopStatMigration.swift; sourceTree = "<group>"; };
+		BD00EE1F2FF14764005D482C /* MIGRATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MIGRATION.md; sourceTree = "<group>"; };
 		BD00EE302FF14764005D482C /* TDDRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TDDRecord.swift; sourceTree = "<group>"; };
 		BD00EE322FF14764005D482C /* TDDMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TDDMigration.swift; sourceTree = "<group>"; };
 		BD00EE342FF14764005D482C /* ContactImageRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactImageRecord.swift; sourceTree = "<group>"; };
@@ -1379,7 +1382,8 @@
 		BD00EE3A2FF14764005D482C /* BatteryMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryMigration.swift; sourceTree = "<group>"; };
 		BD00EE3C2FF14764005D482C /* MealPresetRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetRecord.swift; sourceTree = "<group>"; };
 		BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetMigration.swift; sourceTree = "<group>"; };
-		BD00EE1F2FF14764005D482C /* MIGRATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MIGRATION.md; sourceTree = "<group>"; };
+		BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverrideMigration.swift; sourceTree = "<group>"; };
+		BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverrideRecord.swift; sourceTree = "<group>"; };
 		BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressOverlay.swift; sourceTree = "<group>"; };
 		BD0B2EF22C5998E600B3298F /* MealPresetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetView.swift; sourceTree = "<group>"; };
 		BD10516C2DA986DC007C6D89 /* PulsingLogoAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulsingLogoAnimation.swift; sourceTree = "<group>"; };
@@ -3141,11 +3145,11 @@
 			path = "HomeStateModel+Setup";
 			sourceTree = "<group>";
 		};
-		587A54C82BCDCE0F009D38E2 /* Model */ = {
+		BD00F0010000A000005D482C /* GRDB */ = {
 			isa = PBXGroup;
 			children = (
-				BD00EE1B2FF14764005D482C /* GRDBMigrations.swift */,
 				BD00EE1C2FF14764005D482C /* GRDBStack.swift */,
+				BD00EE1B2FF14764005D482C /* GRDBMigrations.swift */,
 				BD00EE1D2FF14764005D482C /* LoopStat.swift */,
 				BD00EE1E2FF14764005D482C /* LoopStatMigration.swift */,
 				BD00EE302FF14764005D482C /* TDDRecord.swift */,
@@ -3156,7 +3160,17 @@
 				BD00EE3A2FF14764005D482C /* BatteryMigration.swift */,
 				BD00EE3C2FF14764005D482C /* MealPresetRecord.swift */,
 				BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */,
+				BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */,
+				BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */,
 				BD00EE1F2FF14764005D482C /* MIGRATION.md */,
+			);
+			path = GRDB;
+			sourceTree = "<group>";
+		};
+		587A54C82BCDCE0F009D38E2 /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				BD00F0010000A000005D482C /* GRDB */,
 				BD136FAD2F6AC555002217F9 /* NSFetchedResultsControllerDelegate.swift */,
 				3BAD36CB2D7D420500CC298D /* CoreDataInitializationCoordinator.swift */,
 				BDF34F8F2C10CF8C00D51995 /* CoreDataStack.swift */,
@@ -5196,6 +5210,8 @@
 				E592A3782CEEC038009A472C /* ContactImageDataFlow.swift in Sources */,
 				DDAA29852D2D1D9E006546A1 /* AdjustmentsRootView+TempTargets.swift in Sources */,
 				E592A3792CEEC038009A472C /* ContactImageRootView.swift in Sources */,
+				BD00EFD12FF19EFF005D482C /* OverrideRecord.swift in Sources */,
+				BD00EFD22FF19EFF005D482C /* OverrideMigration.swift in Sources */,
 				BDC531182D1062F200088832 /* ContactImageState.swift in Sources */,
 				BD249D9F2D42FD0600412DEB /* StackedChartSetup.swift in Sources */,
 				E592A37A2CEEC038009A472C /* ContactImageProvider.swift in Sources */,

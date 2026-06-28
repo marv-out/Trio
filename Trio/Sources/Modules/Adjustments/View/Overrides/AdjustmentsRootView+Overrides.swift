@@ -33,11 +33,14 @@ extension Adjustments.RootView {
                 titleVisibility: .visible
             ) {
                 if let itemToDelete = selectedOverride {
+                    // Compare by rowid: the running override and its preset list entry can differ in
+                    // mutable fields (enabled/date), so value equality is unreliable here.
+                    let isRunningPreset = state.currentActiveOverride?.pk == selectedOverride?.pk
                     Button(
-                        state.currentActiveOverride == selectedOverride ? "Stop and Delete" : "Delete",
+                        isRunningPreset ? "Stop and Delete" : "Delete",
                         role: .destructive
                     ) {
-                        if state.currentActiveOverride == selectedOverride {
+                        if isRunningPreset {
                             Task {
                                 // Save cancelled Override in OverrideRunStored Entity
                                 // Cancel ALL active Override
@@ -46,7 +49,9 @@ extension Adjustments.RootView {
                         }
                         // Perform the delete action
                         Task {
-                            await state.invokeOverridePresetDeletion(itemToDelete.objectID)
+                            if let pk = itemToDelete.pk {
+                                await state.invokeOverridePresetDeletion(pk)
+                            }
                         }
                         // Reset the selected item after deletion
                         selectedOverride = nil
@@ -57,12 +62,8 @@ extension Adjustments.RootView {
                     selectedOverride = nil
                 }
             } message: {
-                if state.currentActiveOverride == selectedOverride {
-                    Text(
-                        state
-                            .currentActiveOverride == selectedOverride ?
-                            "This override preset is currently running. Deleting will stop it." : ""
-                    )
+                if state.currentActiveOverride?.pk == selectedOverride?.pk {
+                    Text("This override preset is currently running. Deleting will stop it.")
                 }
             }
             .listRowBackground(Color.chart)
@@ -76,9 +77,10 @@ extension Adjustments.RootView {
         }
     }
 
-    private func requestOverridePresetActivation(_ preset: OverrideStored) {
+    private func requestOverridePresetActivation(_ preset: OverrideRecord) {
+        guard let pk = preset.pk else { return }
         let activation = PendingPresetActivation.override(
-            objectID: preset.objectID,
+            pk: pk,
             presetID: preset.id,
             name: preset.name ?? ""
         )
@@ -86,7 +88,7 @@ extension Adjustments.RootView {
         requestPresetActivation(activation)
     }
 
-    func actionButtonsForOverrides(for preset: OverrideStored) -> some View {
+    func actionButtonsForOverrides(for preset: OverrideRecord) -> some View {
         Group {
             Button(role: .destructive) {
                 selectedOverride = preset
@@ -138,21 +140,21 @@ extension Adjustments.RootView {
     }
 
     @ViewBuilder func overridesView(
-        for preset: OverrideStored,
+        for preset: OverrideRecord,
         showCheckMark _: Bool = false,
         onTap: (() -> Void)? = nil
     ) -> some View {
         let isSelected = preset.id == selectedOverridePresetID
         let name = preset.name ?? ""
         let indefinite = preset.indefinite
-        let duration = preset.duration?.decimalValue ?? Decimal(0)
+        let duration = preset.duration ?? Decimal(0)
         let percentage = preset.percentage
-        let smbMinutes = preset.smbMinutes?.decimalValue ?? Decimal(0)
-        let uamMinutes = preset.uamMinutes?.decimalValue ?? Decimal(0)
+        let smbMinutes = preset.smbMinutes ?? Decimal(0)
+        let uamMinutes = preset.uamMinutes ?? Decimal(0)
 
         let target: String = {
             guard let targetValue = preset.target, targetValue != 0 else { return "" }
-            return state.units == .mgdL ? targetValue.description : targetValue.decimalValue.formattedAsMmolL
+            return state.units == .mgdL ? targetValue.description : targetValue.formattedAsMmolL
         }()
 
         let targetString = target.isEmpty ? "" : "\(target) \(state.units.rawValue)"
@@ -161,7 +163,7 @@ extension Adjustments.RootView {
 
         let scheduledSMBString: String = {
             guard preset.smbIsScheduledOff, preset.start != preset.end else { return "" }
-            return " \(formatTimeRange(start: preset.start?.stringValue, end: preset.end?.stringValue))"
+            return " \(formatTimeRange(start: preset.start.map { "\($0)" }, end: preset.end.map { "\($0)" }))"
         }()
 
         let smbString: String = {

@@ -36,9 +36,11 @@ class TestAssembly: Assembly {
             BaseTempTargetsStorage(resolver: r, contextProvider: { self.testContext })
         }.inObjectScope(.container)
 
-        // Override OverrideStorage registration for tests
+        // Override OverrideStorage registration for tests. Overrides now live in GRDB, so this no
+        // longer needs a Core Data context; the GRDB round-trip is tested directly in
+        // OverrideStorageTests against an in-memory pool.
         container.register(OverrideStorage.self) { r in
-            BaseOverrideStorage(resolver: r, contextProvider: { self.testContext })
+            BaseOverrideStorage(resolver: r)
         }.inObjectScope(.container)
     }
 }

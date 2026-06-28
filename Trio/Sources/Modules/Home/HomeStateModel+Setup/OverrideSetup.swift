@@ -1,89 +1,62 @@
-import CoreData
+import Combine
 import Foundation
 
 extension Home.StateModel {
     // MARK: - Overrides
 
+    /// Observes active overrides from GRDB and keeps `overrides` current. Replaces the former
+    /// Core Data `NSFetchedResultsController`. The "date >= oneDayAgo OR indefinite" rule is
+    /// applied here so the tracked region stays deterministic (no `Date()` inside it).
     @MainActor func setupOverrideController() {
-        overrideControllerDelegate.onContentChange = { [weak self] in
-            Task { @MainActor in
-                self?.updateOverridesFromController()
-            }
-        }
-
-        do {
-            try overrideController.performFetch()
-            updateOverridesFromController()
-        } catch {
-            debug(.default, "\(DebuggingIdentifiers.failed) Failed to perform override fetch: \(error)")
-        }
-    }
-
-    @MainActor private func updateOverridesFromController() {
-        guard let objects = overrideController.fetchedObjects else { return }
-        overrides = objects
+        overrideObservationCancellable = OverrideStore.observeActive()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { completion in
+                    if case let .failure(error) = completion {
+                        debug(.default, "\(DebuggingIdentifiers.failed) Override observation failed: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] records in
+                    guard let self else { return }
+                    let cutoff = Date.oneDayAgo
+                    overrides = records.filter { ($0.date ?? .distantPast) >= cutoff || $0.indefinite }
+                }
+            )
     }
 
     // MARK: - Override Runs
 
+    /// Observes recent override runs from GRDB and keeps `overrideRunStored` current. Replaces the
+    /// former Core Data `NSFetchedResultsController`. The "startDate >= oneDayAgo" rule is applied
+    /// here so the tracked region stays deterministic.
     @MainActor func setupOverrideRunController() {
-        overrideRunControllerDelegate.onContentChange = { [weak self] in
-            Task { @MainActor in
-                self?.updateOverrideRunsFromController()
-            }
-        }
-
-        do {
-            try overrideRunController.performFetch()
-            updateOverrideRunsFromController()
-        } catch {
-            debug(.default, "\(DebuggingIdentifiers.failed) Failed to perform override run fetch: \(error)")
-        }
-    }
-
-    @MainActor private func updateOverrideRunsFromController() {
-        guard let objects = overrideRunController.fetchedObjects else { return }
-        overrideRunStored = objects
+        overrideRunObservationCancellable = OverrideRunStore.observeRecent()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { completion in
+                    if case let .failure(error) = completion {
+                        debug(.default, "\(DebuggingIdentifiers.failed) Override run observation failed: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] records in
+                    guard let self else { return }
+                    let cutoff = Date.oneDayAgo
+                    overrideRunStored = records.filter { ($0.startDate ?? .distantPast) >= cutoff }
+                }
+            )
     }
 
     // MARK: - Override Actions
 
-    /// Cancels the running Override, creates an entry in the OverrideRunStored Core Data entity and posts a custom notification so that the AdjustmentsView gets updated
-    @MainActor func cancelOverride(withID id: NSManagedObjectID) async {
+    /// Cancels the running Override (by GRDB rowid), logs an `OverrideRunStored` entry and posts a
+    /// custom notification so the AdjustmentsView updates. The observation keeps `overrides`
+    /// current automatically.
+    @MainActor func cancelOverride(withPk pk: Int64) async {
         do {
-            guard let profileToCancel = try viewContext.existingObject(with: id) as? OverrideStored else { return }
-
-            profileToCancel.enabled = false
-
-            guard viewContext.hasChanges else { return }
-            try viewContext.save()
-
-            await saveToOverrideRunStored(object: profileToCancel)
-
+            try await overrideStorage.cancelOverride(pk: pk)
             Foundation.NotificationCenter.default.post(name: .didUpdateOverrideConfiguration, object: nil)
-        } catch let error as NSError {
-            debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to cancel Profile with error: \(error)")
-        }
-    }
-
-    /// We can safely pass the NSManagedObject  as we are doing everything on the Main Actor
-    @MainActor func saveToOverrideRunStored(object: OverrideStored) async {
-        let newOverrideRunStored = OverrideRunStored(context: viewContext)
-        newOverrideRunStored.id = UUID()
-        newOverrideRunStored.name = object.name
-        newOverrideRunStored.startDate = object.date ?? .distantPast
-        newOverrideRunStored.endDate = Date()
-        newOverrideRunStored.target = NSDecimalNumber(decimal: overrideStorage.calculateTarget(override: object))
-        newOverrideRunStored.override = object
-        newOverrideRunStored.isUploadedToNS = false
-
-        do {
-            guard viewContext.hasChanges else { return }
-            try viewContext.save()
-        } catch let error as NSError {
-            debugPrint(
-                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save an Override to the OverrideRunStored entity with error: \(error)"
-            )
+        } catch {
+            debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to cancel Override with error: \(error)")
         }
     }
 }

@@ -123,15 +123,18 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             }
         }.store(in: &subscriptions)
 
-        coreDataPublisher?.filteredByEntityName("OverrideStored").sink { [weak self] _ in
-            guard let self = self else { return }
-            // Skip if no watch is paired or app not installed
-            guard let session = self.session, session.isPaired, session.isReachable, session.isWatchAppInstalled else { return }
-            Task {
-                let state = await self.setupWatchState()
-                await self.sendDataToWatch(state)
-            }
-        }.store(in: &subscriptions)
+        // Overrides moved to GRDB; observe the store instead of the Core Data save notification.
+        OverrideStore.observeLatest()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                guard let self = self else { return }
+                // Skip if no watch is paired or app not installed
+                guard let session = self.session, session.isPaired, session.isReachable, session.isWatchAppInstalled
+                else { return }
+                Task {
+                    let state = await self.setupWatchState()
+                    await self.sendDataToWatch(state)
+                }
+            }).store(in: &subscriptions)
 
         coreDataPublisher?.filteredByEntityName("TempTargetStored").sink { [weak self] _ in
             guard let self = self else { return }
@@ -191,7 +194,8 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             let determinationIds = try await determinationStorage.fetchLastDeterminationObjectID(
                 predicate: NSPredicate.predicateFor30MinAgoForDetermination
             )
-            let overridePresetIds = try await overrideStorage.fetchForOverridePresets()
+            // Override presets are GRDB value types (no NSManagedObjectID round-trip).
+            let overridePresets = try await overrideStorage.fetchForOverridePresets()
             let tempTargetPresetIds = try await tempTargetStorage.fetchForTempTargetPresets()
 
             // Get NSManagedObjects
@@ -199,8 +203,6 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
                 .getNSManagedObject(with: glucoseIds, context: context)
             let determinationObjects: [OrefDetermination] = try await CoreDataStack.shared
                 .getNSManagedObject(with: determinationIds, context: context)
-            let overridePresetObjects: [OverrideStored] = try await CoreDataStack.shared
-                .getNSManagedObject(with: overridePresetIds, context: context)
             let tempTargetPresetObjects: [TempTargetStored] = try await CoreDataStack.shared
                 .getNSManagedObject(with: tempTargetPresetIds, context: context)
 
@@ -225,7 +227,7 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
                 }
 
                 // Set override presets with their enabled status
-                watchState.overridePresets = overridePresetObjects.map { override in
+                watchState.overridePresets = overridePresets.map { override in
                     OverridePresetWatch(
                         name: override.name ?? "",
                         isEnabled: override.enabled
@@ -885,107 +887,55 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
 
     private func handleCancelOverride() {
         Task {
-            let context = CoreDataStack.shared.newTaskContext()
-
-            if let overrideId = try await overrideStorage.fetchLatestActiveOverride() {
-                let override = await context.perform {
-                    context.object(with: overrideId) as? OverrideStored
+            do {
+                // Overrides live in GRDB; disable the active one (no run logged, matching the
+                // prior watch behavior) and notify the Adjustments UI.
+                guard let active = try await overrideStorage.fetchLatestActiveOverride(), let pk = active.pk else {
+                    debug(.watchManager, "❌ No active override found.")
+                    self.sendAcknowledgment(
+                        toWatch: false,
+                        message: "No active override found.",
+                        ackCode: .genericFailure
+                    )
+                    return
                 }
 
-                await context.perform {
-                    if let activeOverride = override {
-                        activeOverride.enabled = false
+                try await OverrideStore.disable(pks: [pk])
+                debug(.watchManager, "📱 Successfully stopped override")
 
-                        do {
-                            guard context.hasChanges else {
-                                // Acknowledge failure
-                                self.sendAcknowledgment(
-                                    toWatch: false,
-                                    message: "Error! Something went wrong when processing your request.",
-                                    ackCode: .genericFailure
-                                )
-                                return
-                            }
-                            try context.save()
-                            debug(.watchManager, "📱 Successfully stopped override")
-
-                            // Send notification to update Adjustments UI
-                            Foundation.NotificationCenter.default.post(
-                                name: .didUpdateOverrideConfiguration,
-                                object: nil
-                            )
-
-                            // Acknowledge cancellation success
-                            self.sendAcknowledgment(
-                                toWatch: true,
-                                message: String(
-                                    localized: "Stopped Override successfully.",
-                                    comment: "Stopped Override successfully"
-                                ),
-                                ackCode: .overrideStopped
-                            )
-                        } catch {
-                            debug(.watchManager, "❌ Error cancelling override: \(error)")
-                            // Acknowledge cancellation error
-                            self.sendAcknowledgment(toWatch: false, message: "Error stopping Override.", ackCode: .genericFailure)
-                        }
-                    }
-                }
-            } else {
-                debug(.watchManager, "❌ No active override found.")
+                Foundation.NotificationCenter.default.post(name: .didUpdateOverrideConfiguration, object: nil)
                 self.sendAcknowledgment(
-                    toWatch: false,
-                    message: "No active override found.",
-                    ackCode: .genericFailure
+                    toWatch: true,
+                    message: String(
+                        localized: "Stopped Override successfully.",
+                        comment: "Stopped Override successfully"
+                    ),
+                    ackCode: .overrideStopped
                 )
-                return
+            } catch {
+                debug(.watchManager, "❌ Error cancelling override: \(error)")
+                self.sendAcknowledgment(toWatch: false, message: "Error stopping Override.", ackCode: .genericFailure)
             }
         }
     }
 
     private func handleActivateOverride(_ presetName: String) {
         Task {
-            let context = CoreDataStack.shared.newTaskContext()
-
-            debug(.watchManager, "📱 Fetching all override presets...")
-
-            // Fetch all presets to find the one to activate
-            let presetIds = try await overrideStorage.fetchForOverridePresets()
-            let presets: [OverrideStored] = try await CoreDataStack.shared
-                .getNSManagedObject(with: presetIds, context: context)
-
-            debug(.watchManager, "📱 Checking for active override...")
-
             do {
-                // Check for active override
-                if let activeOverrideId = try await overrideStorage.fetchLatestActiveOverride() {
-                    let activeOverride = await context.perform {
-                        context.object(with: activeOverrideId) as? OverrideStored
-                    }
+                debug(.watchManager, "📱 Fetching all override presets...")
+                let presets = try await overrideStorage.fetchForOverridePresets()
 
-                    // Deactivate, if necessary
-                    if let override = activeOverride {
-                        await context.perform {
-                            override.enabled = false
-                        }
-                    }
+                debug(.watchManager, "📱 Checking for active override...")
+                // Deactivate any currently active override first (no run logged).
+                if let active = try await overrideStorage.fetchLatestActiveOverride(), let activePk = active.pk {
+                    try await OverrideStore.disable(pks: [activePk])
                 } else {
                     debug(.watchManager, "📱 Currently no override is active... proceeding to activate override: \(presetName)")
                 }
-            } catch {
-                debug(.watchManager, "❌ Error while checking for active override: \(error)")
-                self.sendAcknowledgment(
-                    toWatch: false,
-                    message: "Failed to load active override.",
-                    ackCode: .genericFailure
-                )
-                return
-            }
 
-            // Activate the selected preset
-            await context.perform {
                 guard let presetToActivate = presets
-                    .first(where: { $0.name?.trimmingCharacters(in: .whitespacesAndNewlines) == presetName })
+                    .first(where: { $0.name?.trimmingCharacters(in: .whitespacesAndNewlines) == presetName }),
+                    let pk = presetToActivate.pk
                 else {
                     debug(.watchManager, "❌ No matching preset found for name: \"\(presetName)\" in \(presets.map(\.name))")
                     self.sendAcknowledgment(
@@ -999,49 +949,25 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
                     return
                 }
 
-                presetToActivate.enabled = true
-                presetToActivate.date = Date()
+                try await overrideStorage.enactOverride(pk: pk)
+                debug(.watchManager, "📱 Successfully activated override: \(presetName)")
 
-                do {
-                    guard context.hasChanges else {
-                        // Acknowledge failure
-                        self.sendAcknowledgment(
-                            toWatch: false,
-                            message: String(
-                                localized: "Error! Something went wrong when processing your request.",
-                                comment: "Error message when activating override"
-                            ),
-                            ackCode: .genericFailure
-                        )
-                        return
-                    }
-                    try context.save()
-                    debug(.watchManager, "📱 Successfully activated override: \(presetName)")
-
-                    // Send notification to update Adjustments UI
-                    Foundation.NotificationCenter.default.post(
-                        name: .didUpdateOverrideConfiguration,
-                        object: nil
-                    )
-
-                    // Acknowledge activation success
-                    self.sendAcknowledgment(
-                        toWatch: true,
-                        message: String(
-                            localized: "Started Override \"\(presetName)\" successfully.",
-                            comment: "Start override with override name"
-                        ),
-                        ackCode: .overrideStarted
-                    )
-                } catch {
-                    debug(.watchManager, "❌ Error activating override: \(error)")
-                    // Acknowledge activation error
-                    self.sendAcknowledgment(
-                        toWatch: false,
-                        message: "Error activating Override \"\(presetName)\".",
-                        ackCode: .genericFailure
-                    )
-                }
+                Foundation.NotificationCenter.default.post(name: .didUpdateOverrideConfiguration, object: nil)
+                self.sendAcknowledgment(
+                    toWatch: true,
+                    message: String(
+                        localized: "Started Override \"\(presetName)\" successfully.",
+                        comment: "Start override with override name"
+                    ),
+                    ackCode: .overrideStarted
+                )
+            } catch {
+                debug(.watchManager, "❌ Error activating override: \(error)")
+                self.sendAcknowledgment(
+                    toWatch: false,
+                    message: "Error activating Override \"\(presetName)\".",
+                    ackCode: .genericFailure
+                )
             }
         }
     }

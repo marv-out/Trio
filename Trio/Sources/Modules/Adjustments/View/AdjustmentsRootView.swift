@@ -14,7 +14,7 @@ extension Adjustments {
         @State var showTempTargetCheckmark: Bool = false
         @State var selectedOverridePresetID: String?
         @State var selectedTempTargetPresetID: String?
-        @State var selectedOverride: OverrideStored?
+        @State var selectedOverride: OverrideRecord?
         @State var selectedTempTarget: TempTargetStored?
         @State var isConfirmDeletePresented = false
         @State var isPromptPresented = false
@@ -316,7 +316,8 @@ extension Adjustments {
 
 extension Adjustments.RootView: View {
     enum PendingPresetActivation {
-        case override(objectID: NSManagedObjectID, presetID: String?, name: String)
+        // Overrides moved to GRDB: identity is the rowid `pk`. Temp Targets are still Core Data.
+        case override(pk: Int64, presetID: String?, name: String)
         case tempTarget(objectID: NSManagedObjectID, presetID: String?, name: String)
 
         var name: String {
@@ -369,8 +370,8 @@ extension Adjustments.RootView: View {
     func activatePreset(_ activation: PendingPresetActivation) {
         Task {
             switch activation {
-            case let .override(objectID, presetID, _):
-                await state.enactOverridePreset(withID: objectID)
+            case let .override(pk, presetID, _):
+                await state.enactOverridePreset(withPk: pk)
 
                 await MainActor.run {
                     state.hideModal()

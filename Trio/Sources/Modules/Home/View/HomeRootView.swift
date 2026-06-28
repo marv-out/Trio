@@ -42,11 +42,8 @@ extension Home {
             TimePicker(active: false, hours: 24)
         ]
 
-        @FetchRequest(fetchRequest: OverrideStored.fetch(
-            NSPredicate.lastActiveOverride,
-            ascending: false,
-            fetchLimit: 1
-        )) var latestOverride: FetchedResults<OverrideStored>
+        // Overrides now live in GRDB; `state.overrides` is kept current via ValueObservation
+        // (see OverrideSetup) and is sorted newest-first like the former @FetchRequest.
 
         @FetchRequest(fetchRequest: TempTargetStored.fetch(
             NSPredicate.lastActiveTempTarget,
@@ -218,7 +215,7 @@ extension Home {
         }
 
         var overrideString: String? {
-            guard let latestOverride = latestOverride.first else {
+            guard let latestOverride = state.overrides.first else {
                 return nil
             }
 
@@ -230,7 +227,7 @@ extension Home {
             let percentString = percent == 100 ? "" : "\(percent.formatted(.number)) %"
 
             let unit = state.units
-            var target = (latestOverride.target ?? 0) as Decimal
+            var target = latestOverride.target ?? 0
             target = unit == .mmolL ? target.asMmolL : target
 
             var targetString = target == 0 ? "" : (fetchedTargetFormatter.string(from: target as NSNumber) ?? "") + " " + unit
@@ -240,7 +237,7 @@ extension Home {
             }
 
             let duration = latestOverride.duration ?? 0
-            let addedMinutes = Int(truncating: duration)
+            let addedMinutes = Int(truncating: duration as NSNumber)
             let date = latestOverride.date ?? Date()
             let newDuration = max(
                 Decimal(Date().distance(to: date.addingTimeInterval(addedMinutes.minutes.timeInterval)).minutes),
@@ -258,15 +255,16 @@ extension Home {
                 } else {
                     /// Do not show the Override anymore
                     Task {
-                        guard let objectID = self.latestOverride.first?.objectID else { return }
-                        await state.cancelOverride(withID: objectID)
+                        guard let pk = state.overrides.first?.pk else { return }
+                        await state.cancelOverride(withPk: pk)
                     }
                 }
             }
 
-            let smbScheduleString = latestOverride
-                .smbIsScheduledOff && ((latestOverride.start?.stringValue ?? "") != (latestOverride.end?.stringValue ?? ""))
-                ? " \(formatTimeRange(start: latestOverride.start?.stringValue, end: latestOverride.end?.stringValue))"
+            let startString = latestOverride.start.map { "\($0)" } ?? ""
+            let endString = latestOverride.end.map { "\($0)" } ?? ""
+            let smbScheduleString = latestOverride.smbIsScheduledOff && (startString != endString)
+                ? " \(formatTimeRange(start: startString, end: endString))"
                 : ""
 
             let smbToggleString = latestOverride.smbIsOff || latestOverride
@@ -277,14 +275,14 @@ extension Home {
 
             if !latestOverride.smbIsOff, latestOverride.advancedSettings {
                 if let smbMinutes = latestOverride.smbMinutes,
-                   smbMinutes.decimalValue != settingsManager.preferences.maxSMBBasalMinutes
+                   smbMinutes != settingsManager.preferences.maxSMBBasalMinutes
                 {
                     smbMinuteString = "SMB\u{00A0}\(smbMinutes)\u{00A0}" +
                         String(localized: "m", comment: "Abbreviation for Minutes")
                 }
 
                 if let uamMinutes = latestOverride.uamMinutes,
-                   uamMinutes.decimalValue != settingsManager.preferences.maxUAMSMBBasalMinutes
+                   uamMinutes != settingsManager.preferences.maxUAMSMBBasalMinutes
                 {
                     uamMinuteString = "UAM\u{00A0}\(uamMinutes)\u{00A0}" +
                         String(localized: "m", comment: "Abbreviation for Minutes")
@@ -572,7 +570,7 @@ extension Home {
                     .font(.title2)
                     .foregroundStyle(Color.primary, Color.purple)
                 VStack(alignment: .leading) {
-                    Text(latestOverride.first?.name ?? String(localized: "Custom Override"))
+                    Text(state.overrides.first?.name ?? String(localized: "Custom Override"))
                         .font(.subheadline)
                         .frame(alignment: .leading)
 
@@ -638,21 +636,21 @@ extension Home {
             Image(systemName: "xmark.app")
                 .font(.title)
                 .confirmationDialog(
-                    "Stop the Override \"\(latestOverride.first?.name ?? "")\"?",
+                    "Stop the Override \"\(state.overrides.first?.name ?? "")\"?",
                     isPresented: $isConfirmStopOverridePresented,
                     titleVisibility: .visible
                 ) {
                     Button("Stop", role: .destructive) {
                         Task {
-                            guard let objectID = latestOverride.first?.objectID else { return }
-                            await state.cancelOverride(withID: objectID)
+                            guard let pk = state.overrides.first?.pk else { return }
+                            await state.cancelOverride(withPk: pk)
                         }
                     }
                     Button("Cancel", role: .cancel) {}
                 }
                 .padding(.trailing, 8)
                 .onTapGesture {
-                    if !latestOverride.isEmpty {
+                    if !state.overrides.isEmpty {
                         isConfirmStopOverridePresented = true
                     }
                 }
@@ -722,9 +720,9 @@ extension Home {
                             Spacer()
 
                             adjustmentsCancelView({
-                                if !latestTempTarget.isEmpty, !latestOverride.isEmpty {
+                                if !latestTempTarget.isEmpty, !state.overrides.isEmpty {
                                     showCancelConfirmDialog = true
-                                } else if !latestOverride.isEmpty {
+                                } else if !state.overrides.isEmpty {
                                     showCancelAlert = true
                                 } else if !latestTempTarget.isEmpty {
                                     showCancelAlert = true
@@ -749,8 +747,8 @@ extension Home {
                     .confirmationDialog("Adjustment to Stop", isPresented: $showCancelConfirmDialog) {
                         Button("Stop Override", role: .destructive) {
                             Task {
-                                guard let objectID = latestOverride.first?.objectID else { return }
-                                await state.cancelOverride(withID: objectID)
+                                guard let pk = state.overrides.first?.pk else { return }
+                                await state.cancelOverride(withPk: pk)
                             }
                         }
                         Button("Stop Temp Target", role: .destructive) {
@@ -761,8 +759,8 @@ extension Home {
                         }
                         Button("Stop All Adjustments", role: .destructive) {
                             Task {
-                                guard let overrideObjectID = latestOverride.first?.objectID else { return }
-                                await state.cancelOverride(withID: overrideObjectID)
+                                guard let overridePk = state.overrides.first?.pk else { return }
+                                await state.cancelOverride(withPk: overridePk)
 
                                 guard let tempTargetObjectID = latestTempTarget.first?.objectID else { return }
                                 await state.cancelTempTarget(withID: tempTargetObjectID)

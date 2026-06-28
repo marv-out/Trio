@@ -470,10 +470,10 @@ extension Notification.Name {
             days: 2,
             relationshipKey: "forecast"
         )
-        async let overrideDeletion: () = coreDataStack
-            .batchDeleteOlderThan(OverrideStored.self, dateKey: "date", days: 3, isPresetKey: "isPreset")
-        async let overrideRunDeletion: () = coreDataStack
-            .batchDeleteOlderThan(OverrideRunStored.self, dateKey: "startDate", days: 3)
+        // Overrides + their runs now live in GRDB. Presets are preserved (mirrors the former
+        // `isPresetKey: "isPreset"`); runs older than 3 days are pruned.
+        async let overrideDeletion: () = OverrideStore.deleteOlderThan(days: 3)
+        async let overrideRunDeletion: () = OverrideRunStore.deleteOlderThan(days: 3)
 
         // Await each task to ensure they are all completed
         try await glucoseDeletion

@@ -162,43 +162,10 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
         return controller
     }()
 
-    let overrideUploadControllerDelegate = FetchedResultsControllerDelegate()
-    lazy var overrideUploadController: NSFetchedResultsController<OverrideStored> = {
-        let request = NSFetchRequest<OverrideStored>(entityName: "OverrideStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \OverrideStored.date, ascending: true)]
-        request.predicate = NSPredicate(
-            format: "date >= %@ AND isUploadedToNS == %@",
-            Date.oneDayAgo as NSDate,
-            false as NSNumber
-        )
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = overrideUploadControllerDelegate
-        return controller
-    }()
-
-    let overrideRunUploadControllerDelegate = FetchedResultsControllerDelegate()
-    lazy var overrideRunUploadController: NSFetchedResultsController<OverrideRunStored> = {
-        let request = NSFetchRequest<OverrideRunStored>(entityName: "OverrideRunStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \OverrideRunStored.startDate, ascending: true)]
-        request.predicate = NSPredicate(
-            format: "startDate >= %@ AND isUploadedToNS == %@",
-            Date.oneDayAgo as NSDate,
-            false as NSNumber
-        )
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = overrideRunUploadControllerDelegate
-        return controller
-    }()
+    // Overrides + their runs now live in GRDB; the "not yet uploaded" trigger is a ValueObservation
+    // (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
+    var overrideUploadObservationCancellable: AnyCancellable?
+    var overrideRunUploadObservationCancellable: AnyCancellable?
 
     let tempTargetUploadControllerDelegate = FetchedResultsControllerDelegate()
     lazy var tempTargetUploadController: NSFetchedResultsController<TempTargetStored> = {
@@ -1128,26 +1095,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     }
 
     private func updateOverridesAsUploaded(_ overrides: [NightscoutExercise]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateOverridesAsUploaded"
-        await context.perform {
-            let ids = overrides.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<OverrideStored> = OverrideStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToNS = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error.userInfo)"
-                )
-            }
+        do {
+            let ids = overrides.compactMap { $0.id?.uuidString }
+            try await OverrideStore.markUploaded(ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error)"
+            )
         }
     }
 
@@ -1188,26 +1142,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     }
 
     private func updateOverrideRunsAsUploaded(_ overrideRuns: [NightscoutExercise]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateOverrideRunsAsUploaded"
-        await context.perform {
-            let ids = overrideRuns.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<OverrideRunStored> = OverrideRunStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToNS = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error.userInfo)"
-                )
-            }
+        do {
+            let ids = overrideRuns.compactMap(\.id)
+            try await OverrideRunStore.markUploaded(ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error)"
+            )
         }
     }
 

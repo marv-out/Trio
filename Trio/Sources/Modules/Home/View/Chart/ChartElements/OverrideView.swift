@@ -1,14 +1,12 @@
 import Charts
-import CoreData
 import Foundation
 import SwiftUI
 
 struct OverrideView: ChartContent {
     var state: Home.StateModel
-    let overrides: [OverrideStored]
-    let overrideRunStored: [OverrideRunStored]
+    let overrides: [OverrideRecord]
+    let overrideRunStored: [OverrideRunRecord]
     let units: GlucoseUnits
-    let viewContext: NSManagedObjectContext
 
     var body: some ChartContent {
         drawActiveOverrides()
@@ -18,11 +16,11 @@ struct OverrideView: ChartContent {
     private func drawActiveOverrides() -> some ChartContent {
         ForEach(overrides) { override in
             let start: Date = override.date ?? .distantPast
-            let duration = MainChartHelper.calculateDuration(
-                objectID: override.objectID,
-                attribute: "duration",
-                context: viewContext
-            ) ?? 0
+            // `duration` is in minutes; convert to seconds (0 → treated as no duration).
+            let duration: TimeInterval = {
+                let minutes = override.duration ?? 0
+                return minutes != 0 ? TimeInterval(truncating: (minutes * 60) as NSNumber) : 0
+            }()
             let end: Date = {
                 if override.indefinite {
                     return start.addingTimeInterval(60 * 60 * 24 * 30)
@@ -49,7 +47,7 @@ struct OverrideView: ChartContent {
         ForEach(overrideRunStored) { overrideRunStored in
             let start: Date = overrideRunStored.startDate ?? .distantPast
             let end: Date = overrideRunStored.endDate ?? Date()
-            let target = (overrideRunStored.target?.decimalValue ?? 100) == 0 ? 100 : overrideRunStored.target!.decimalValue
+            let target = (overrideRunStored.target ?? 100) == 0 ? 100 : (overrideRunStored.target ?? 100)
             RuleMark(
                 xStart: .value("Start", start, unit: .second),
                 xEnd: .value("End", end, unit: .second),
@@ -61,15 +59,11 @@ struct OverrideView: ChartContent {
     }
 
     // Handle Overrides where no Target is provided
-    private func getOverrideTarget(override: OverrideStored) -> Decimal {
-        if let target = MainChartHelper
-            .calculateTarget(objectID: override.objectID, attribute: "target", context: viewContext)
-        {
+    private func getOverrideTarget(override: OverrideRecord) -> Decimal {
+        if let target = override.target, target != 0 {
             return target
-        } else if override.target == 0 {
-            return state.currentGlucoseTarget // Default target
         } else {
-            return override.target?.decimalValue ?? state.currentGlucoseTarget
+            return state.currentGlucoseTarget // Default target
         }
     }
 }

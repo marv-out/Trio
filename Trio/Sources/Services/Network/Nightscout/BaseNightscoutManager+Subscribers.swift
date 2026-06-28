@@ -37,12 +37,16 @@ extension BaseNightscoutManager {
         determinationUploadControllerDelegate.onContentChange = { [weak self] in
             self?.requestUpload(.deviceStatus)
         }
-        overrideUploadControllerDelegate.onContentChange = { [weak self] in
-            self?.requestUpload(.overrides)
-        }
-        overrideRunUploadControllerDelegate.onContentChange = { [weak self] in
-            self?.requestUpload(.overrides)
-        }
+        // Overrides + runs live in GRDB: a ValueObservation fires when the not-yet-uploaded set
+        // changes, replacing the former NSFetchedResultsControllers.
+        overrideUploadObservationCancellable = OverrideStore.observeNotYetUploadedCount()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                self?.requestUpload(.overrides)
+            })
+        overrideRunUploadObservationCancellable = OverrideRunStore.observeNotYetUploadedCount()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                self?.requestUpload(.overrides)
+            })
         tempTargetUploadControllerDelegate.onContentChange = { [weak self] in
             self?.requestUpload(.tempTargets)
         }
@@ -63,8 +67,6 @@ extension BaseNightscoutManager {
         Task { @MainActor in
             do {
                 try self.determinationUploadController.performFetch()
-                try self.overrideUploadController.performFetch()
-                try self.overrideRunUploadController.performFetch()
                 try self.tempTargetUploadController.performFetch()
                 try self.tempTargetRunUploadController.performFetch()
                 try self.pumpEventUploadController.performFetch()

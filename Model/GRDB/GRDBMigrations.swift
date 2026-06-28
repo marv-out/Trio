@@ -104,6 +104,58 @@ extension GRDBStack {
             try db.create(index: "mealPresetStored_on_dish", on: "mealPresetStored", columns: ["dish"])
         }
 
+        // v6 — OverrideStored + OverrideRunStored (profile overrides, presets, and their runs).
+        // First relationship-bearing family: the Core Data `override` to-one relationship becomes
+        // the `overridePk` foreign key on `overrideRunStored`. The 6 override Decimals and the run
+        // `target` are stored as TEXT (lossless), like `TDDRecord`.
+        migrator.registerMigration("v6_override") { db in
+            try db.create(table: "overrideStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID (string form)
+                t.column("name", .text)
+                t.column("date", .datetime)
+                t.column("enabled", .boolean).notNull().defaults(to: false)
+                t.column("isPreset", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToNS", .boolean).notNull().defaults(to: false)
+                t.column("orderPosition", .integer).notNull().defaults(to: 0)
+                t.column("indefinite", .boolean).notNull().defaults(to: false)
+                t.column("percentage", .double).notNull().defaults(to: 100)
+                t.column("advancedSettings", .boolean).notNull().defaults(to: false)
+                t.column("isfAndCr", .boolean).notNull().defaults(to: true)
+                t.column("isf", .boolean).notNull().defaults(to: true)
+                t.column("cr", .boolean).notNull().defaults(to: true)
+                t.column("smbIsOff", .boolean).notNull().defaults(to: false)
+                t.column("smbIsScheduledOff", .boolean).notNull().defaults(to: false)
+                t.column("duration", .text) // Decimal as string
+                t.column("target", .text)
+                t.column("smbMinutes", .text)
+                t.column("uamMinutes", .text)
+                t.column("start", .text)
+                t.column("end", .text)
+            }
+            // Active-override and preset queries filter on these; date sorts the active list.
+            try db.create(index: "overrideStored_on_date", on: "overrideStored", columns: ["date"])
+            try db.create(index: "overrideStored_on_isPreset", on: "overrideStored", columns: ["isPreset"])
+            try db.create(index: "overrideStored_on_enabled", on: "overrideStored", columns: ["enabled"])
+
+            try db.create(table: "overrideRunStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID (string form)
+                t.column("name", .text)
+                t.column("startDate", .datetime)
+                t.column("endDate", .datetime)
+                t.column("isUploadedToNS", .boolean).notNull().defaults(to: false)
+                t.column("target", .text) // Decimal as string
+                // Replaces the Core Data `override` to-one relationship. SET NULL on delete so a
+                // run survives its source override being cleaned up (it keeps its own dates/name).
+                t.column("overridePk", .integer)
+                    .references("overrideStored", onDelete: .setNull)
+            }
+            // Run queries filter/sort on startDate; the FK lookup resolves the source override.
+            try db.create(index: "overrideRunStored_on_startDate", on: "overrideRunStored", columns: ["startDate"])
+            try db.create(index: "overrideRunStored_on_overridePk", on: "overrideRunStored", columns: ["overridePk"])
+        }
+
         return migrator
     }
 }

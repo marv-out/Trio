@@ -136,9 +136,15 @@ final class LiveActivityData: ObservableObject {
 
     /// Registers handlers for Core Data changes related to overrides, glucose readings, and determinations.
     private func registerHandler() {
-        coreDataPublisher?.filteredByEntityName("OverrideStored").sink { [weak self] _ in
-            Task { await self?.loadOverrides() }
-        }.store(in: &subscriptions)
+        // Overrides moved to GRDB; observe the store instead of the Core Data save notification.
+        OverrideStore.observeLatest()
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] _ in
+                    Task { await self?.loadOverrides() }
+                }
+            )
+            .store(in: &subscriptions)
 
         coreDataPublisher?.filteredByEntityName("TempTargetStored").sink { [weak self] _ in
             Task { await self?.loadTempTarget() }

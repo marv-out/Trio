@@ -82,20 +82,15 @@ extension LiveActivityManager {
     }
 
     func fetchAndMapOverride() async throws -> OverrideData? {
-        try await fetchAndMapLatest(
-            ofType: OverrideStored.self,
-            predicate: .predicateForOneDayAgo,
-            key: "date",
-            propertiesToFetch: ["enabled", "name", "target", "date", "duration"]
-        ) { row in
-            OverrideData(
-                isActive: row["enabled"] as? Bool ?? false,
-                overrideName: row["name"] as? String ?? "Override",
-                date: row["date"] as? Date ?? Date(),
-                duration: row["duration"] as? Decimal ?? 0,
-                target: row["target"] as? Decimal ?? 0
-            )
-        }
+        // Overrides now live in GRDB; read the latest within the last day directly.
+        guard let record = try await OverrideStore.fetchLastCreated() else { return nil }
+        return OverrideData(
+            isActive: record.enabled,
+            overrideName: record.name ?? "Override",
+            date: record.date ?? Date(),
+            duration: record.duration ?? 0,
+            target: record.target ?? 0
+        )
     }
 
     private func fetchAndMapLatest<Entity: NSManagedObject, Output>(

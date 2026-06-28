@@ -125,8 +125,7 @@ extension MainChartView {
                     state: state,
                     overrides: state.overrides,
                     overrideRunStored: state.overrideRunStored,
-                    units: state.units,
-                    viewContext: context
+                    units: state.units
                 )
 
                 TempTargetView(

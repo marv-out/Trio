@@ -1,3 +1,4 @@
+import Combine
 import CoreData
 import HealthKit
 import Observation
@@ -27,10 +28,33 @@ extension History {
         var carbEntryToEdit: CarbEntryStored?
         var showCarbEntryEditor = false
 
+        // Override runs now live in GRDB; observed via ValueObservation instead of a SwiftUI
+        // @FetchRequest. The "startDate >= oneDayAgo" rule is applied in the sink.
+        var overrideRunStored: [OverrideRunRecord] = []
+        @ObservationIgnored private var overrideRunObservationCancellable: AnyCancellable?
+
         override func subscribe() {
             units = settingsManager.settings.units
             broadcaster.register(DeterminationObserver.self, observer: self)
             broadcaster.register(SettingsObserver.self, observer: self)
+            setupOverrideRunObservation()
+        }
+
+        private func setupOverrideRunObservation() {
+            overrideRunObservationCancellable = OverrideRunStore.observeRecent()
+                .receive(on: DispatchQueue.main)
+                .sink(
+                    receiveCompletion: { completion in
+                        if case let .failure(error) = completion {
+                            debug(.default, "\(DebuggingIdentifiers.failed) History override run observation failed: \(error)")
+                        }
+                    },
+                    receiveValue: { [weak self] records in
+                        guard let self else { return }
+                        let cutoff = Date.oneDayAgo
+                        overrideRunStored = records.filter { ($0.startDate ?? .distantPast) >= cutoff }
+                    }
+                )
         }
 
         /// Checks if the glucose data is fresh based on the given date

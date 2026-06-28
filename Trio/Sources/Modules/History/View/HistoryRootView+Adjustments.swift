@@ -23,20 +23,20 @@ extension History.RootView {
     }
 
     fileprivate var combinedAdjustments: [AdjustmentItem] {
-        let overrides = overrideRunStored.map { override -> AdjustmentItem in
+        let overrides = state.overrideRunStored.map { override -> AdjustmentItem in
             AdjustmentItem(
-                id: override.objectID,
+                id: AnyHashable(override.id ?? UUID()),
                 name: override.name ?? String(localized: "Override"),
                 startDate: override.startDate ?? Date(),
                 endDate: override.endDate ?? Date(),
-                target: override.target?.decimalValue,
+                target: override.target,
                 type: .override
             )
         }
 
         let tempTargets = tempTargetRunStored.map { tempTarget -> AdjustmentItem in
             AdjustmentItem(
-                id: tempTarget.objectID,
+                id: AnyHashable(tempTarget.objectID),
                 name: tempTarget.name ?? String(localized: "Temp Target"),
                 startDate: tempTarget.startDate ?? Date(),
                 endDate: tempTarget.endDate ?? Date(),
@@ -55,7 +55,7 @@ extension History.RootView {
     }
 
     fileprivate struct AdjustmentItem: Identifiable {
-        let id: NSManagedObjectID
+        let id: AnyHashable
         let name: String
         let startDate: Date
         let endDate: Date

@@ -97,8 +97,8 @@ extension Home {
         var suspendAndResumeEvents: [PumpEventStored] = []
         var batteryFromPersistence: [BatteryRecord] = []
         var lastPumpBolus: PumpEventStored?
-        var overrides: [OverrideStored] = []
-        var overrideRunStored: [OverrideRunStored] = []
+        var overrides: [OverrideRecord] = []
+        var overrideRunStored: [OverrideRunRecord] = []
         var tempTargetStored: [TempTargetStored] = []
         var tempTargetRunStored: [TempTargetRunStored] = []
         var isOverrideCancelled: Bool = false
@@ -251,35 +251,10 @@ extension Home {
             return controller
         }()
 
-        @ObservationIgnored let overrideControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var overrideController: NSFetchedResultsController<OverrideStored> = {
-            let request = NSFetchRequest<OverrideStored>(entityName: "OverrideStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \OverrideStored.date, ascending: false)]
-            request.predicate = NSPredicate.lastActiveOverride
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = overrideControllerDelegate
-            return controller
-        }()
-
-        @ObservationIgnored let overrideRunControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var overrideRunController: NSFetchedResultsController<OverrideRunStored> = {
-            let request = NSFetchRequest<OverrideRunStored>(entityName: "OverrideRunStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \OverrideRunStored.startDate, ascending: false)]
-            request.predicate = NSPredicate(format: "startDate >= %@", Date.oneDayAgo as NSDate)
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = overrideRunControllerDelegate
-            return controller
-        }()
+        // Overrides + their runs now live in GRDB; the lists are kept current via ValueObservation
+        // instead of Core Data NSFetchedResultsControllers. See OverrideSetup.
+        @ObservationIgnored var overrideObservationCancellable: AnyCancellable?
+        @ObservationIgnored var overrideRunObservationCancellable: AnyCancellable?
 
         @ObservationIgnored let tempTargetControllerDelegate = FetchedResultsControllerDelegate()
         @ObservationIgnored private(set) lazy var tempTargetController: NSFetchedResultsController<TempTargetStored> = {

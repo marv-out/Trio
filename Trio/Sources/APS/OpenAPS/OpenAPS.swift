@@ -528,10 +528,12 @@ final class OpenAPS {
     }
 
     func prepareTrioCustomOrefVariables(on context: NSManagedObjectContext) async throws -> RawJSON {
-        // TDD now lives in GRDB — fetch before the Core Data perform block (the block is synchronous).
+        // TDD and Overrides now live in GRDB — fetch before the Core Data perform block (which is
+        // synchronous). Override records are value types, safe to capture in the block.
         let tenDaysAgo = Date().addingTimeInterval(-10.days.timeInterval)
         let twoHoursAgo = Date().addingTimeInterval(-2.hours.timeInterval)
         let tddEntries = try await TDDStore.entries(since: tenDaysAgo, positiveTotalOnly: true)
+        let activeOverrides = try await OverrideStore.fetchActiveConfigurations()
 
         return try await context.perform {
             // Retrieve user preferences
@@ -540,13 +542,12 @@ final class OpenAPS {
             let maxSMBBasalMinutes = userPreferences?.maxSMBBasalMinutes ?? 30
             let maxUAMBasalMinutes = userPreferences?.maxUAMSMBBasalMinutes ?? 30
 
-            // Fetch the last active Override
-            let activeOverrides = try self.fetchActiveOverrides(on: context)
+            // The last active Override (pre-fetched from GRDB above).
             let isOverrideActive = activeOverrides.first?.enabled ?? false
             let overridePercentage = Decimal(activeOverrides.first?.percentage ?? 100)
             let isOverrideIndefinite = activeOverrides.first?.indefinite ?? true
             let disableSMBs = activeOverrides.first?.smbIsOff ?? false
-            let overrideTargetBG = activeOverrides.first?.target?.decimalValue ?? 0
+            let overrideTargetBG = activeOverrides.first?.target ?? 0
 
             // Calculate averages for Total Daily Dose (TDD) from the pre-fetched GRDB entries
             let totalTDD = tddEntries.compactMap(\.total).reduce(0, +)
@@ -573,7 +574,7 @@ final class OpenAPS {
                 date: Date(),
                 overridePercentage: overridePercentage,
                 useOverride: isOverrideActive,
-                duration: activeOverrides.first?.duration?.decimalValue ?? 0,
+                duration: activeOverrides.first?.duration ?? 0,
                 unlimited: isOverrideIndefinite,
                 overrideTarget: overrideTargetBG,
                 smbIsOff: disableSMBs,
@@ -582,10 +583,10 @@ final class OpenAPS {
                 isf: activeOverrides.first?.isf ?? false,
                 cr: activeOverrides.first?.cr ?? false,
                 smbIsScheduledOff: activeOverrides.first?.smbIsScheduledOff ?? false,
-                start: (activeOverrides.first?.start ?? 0) as Decimal,
-                end: (activeOverrides.first?.end ?? 0) as Decimal,
-                smbMinutes: activeOverrides.first?.smbMinutes?.decimalValue ?? maxSMBBasalMinutes,
-                uamMinutes: activeOverrides.first?.uamMinutes?.decimalValue ?? maxUAMBasalMinutes
+                start: activeOverrides.first?.start ?? 0,
+                end: activeOverrides.first?.end ?? 0,
+                smbMinutes: activeOverrides.first?.smbMinutes ?? maxSMBBasalMinutes,
+                uamMinutes: activeOverrides.first?.uamMinutes ?? maxUAMBasalMinutes
             )
 
             // Save and return contents of Trio's custom oref variables
@@ -1195,17 +1196,6 @@ extension OpenAPS {
             ascending: false,
             fetchLimit: 1
         ) as? [TempTargetStored] ?? []
-    }
-
-    func fetchActiveOverrides(on context: NSManagedObjectContext) throws -> [OverrideStored] {
-        try CoreDataStack.shared.fetchEntities(
-            ofType: OverrideStored.self,
-            onContext: context,
-            predicate: NSPredicate.lastActiveOverride,
-            key: "date",
-            ascending: false,
-            fetchLimit: 1
-        ) as? [OverrideStored] ?? []
     }
 
     func fetchGlucose(on context: NSManagedObjectContext) throws -> [GlucoseStored] {

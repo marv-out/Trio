@@ -144,42 +144,51 @@ Saved meal templates. Most invasive UI so far — replaced a SwiftUI `@FetchRequ
 
 The Core Data `MealPresetStored` entity stays as the read-only migration source.
 
-### 🔧 Step 7 — `OverrideStored` + `OverrideRunStored` (planned, not yet implemented)
+### ✅ Step 7 — `OverrideStored` + `OverrideRunStored` (done, this branch)
 
-The first relationship-bearing family and by far the largest surface (~18–20 files). Scoped
-for its own focused pass. Full call-site map lives in the PR notes; the design decisions:
+The first relationship-bearing family and by far the largest surface (~20 files). Touched:
 
-**Records**
+**Records (`Model/OverrideRecord.swift`)**
 - `OverrideRecord` — 22 attrs; the 6 Decimals (`duration`, `end`, `smbMinutes`, `start`,
   `target`, `uamMinutes`) stored as TEXT with a manual `FetchableRecord`/`PersistableRecord`
-  (like `TDDRecord`). `id` is a String. `pk` = rowid.
-- `OverrideRunRecord` — 7 attrs + `overridePk: Int64?` foreign key replacing the
-  `override` to-one relationship. The Nightscout `overrideRun.override?.date` traversal
-  becomes a join/lookup by `overridePk`.
+  (like `TDDRecord`). `id` is a String, `pk` = rowid. `Hashable`/`Identifiable`.
+- `OverrideRunRecord` — 7 attrs + `overridePk: Int64?` foreign key replacing the `override`
+  to-one relationship (`ON DELETE SET NULL`). The Nightscout `overrideRun.override?.date`
+  traversal became `OverrideRunStore.sourceOverrideDate(for:)` (FK lookup).
+- `OverrideStore` / `OverrideRunStore`: fetchPresets, fetchActiveConfigurations
+  (`lastActiveOverride`), fetchLatestActive, fetchLastCreated, fetch(pk:/id:), store (computes
+  `orderPosition = count+1` for presets), copyRunning, update, disable(pks:), delete,
+  deleteOlderThan (presets preserved), reorder, markUploaded, fetchNotYetUploaded, saveRun,
+  and `observeActive`/`observeRecent`/`observeLatest`/`observeNotYetUploadedCount`.
 
-**Identity (replaces NSManagedObjectID passing)** — the hard part. Intents, RemoteControl
-and Watch return `[NSManagedObjectID]` and re-fetch with `existingObject(with:)` across
-process boundaries. Replace with the stable business `id` (Override: String, Run: UUID) or
-the rowid `pk`; rewrite each call site to carry that instead of an objectID. Affected:
-`OverridePresetsIntentRequest`, `TrioRemoteControl+Override`, `AppleWatchManager`,
-`AdjustmentsStateModel+Overrides`, `OverrideView`.
+**Schema v6 + `OverrideMigration`** — `overrideStored` + `overrideRunStored` tables with indexes;
+the one-time copy resolves the `override` relationship via legacy `NSManagedObjectID` → new `pk`
+(the override `id` is not unique — `copyRunningOverride` duplicates it).
 
-**Store API needed**: fetchPresets (sorted by `orderPosition`), fetchActive
-(`lastActiveOverride` predicate), fetchLatestActive, lastCreated, store (with computed
-`orderPosition = count+1` for presets), copyRunning, delete(by id), reorder (batch
-`orderPosition`), enable/disable (update), saveRun (insert run + set `overridePk`),
-not-yet-uploaded fetches (Override + Run, with join), preset export, `observeActive` +
-`observeRuns` (ValueObservation → replaces the 2 FRCs and the 2 `@FetchRequest`s).
+**Identity (replaces NSManagedObjectID passing)** — `OverrideStorage` now deals in
+`OverrideRecord`/`OverrideRunRecord` value types; call sites carry `pk` (Int64) or the business
+`id`. The "disable active + log a run" composite (previously duplicated in the intents,
+RemoteControl, Watch and the state models) is centralized in `BaseOverrideStorage`. `calculateTarget`
+and `copyRunningOverride` are now pure value-type functions (no `@MainActor`/viewContext).
+Rewrote: `OverridePresetsIntentRequest`, `TrioRemoteControl+Override`, `AppleWatchManager`,
+`AdjustmentsStateModel(+Overrides)`, `EditOverrideForm`, `AdjustmentsRootView(+Overrides)`,
+`OverrideView`, `SettingsExportStateModel`, `OpenAPS.prepareTrioCustomOrefVariables`.
 
-**Reactivity**: Home `overrideController`/`overrideRunController` FRCs and the
-`HomeRootView`/`HistoryRootView` `@FetchRequest`s → `ValueObservation` feeding `@Observable`
-arrays (pattern from TDD/Battery/MealPreset).
+**Reactivity**: Home `overrideController`/`overrideRunController` FRCs → `OverrideStore.observeActive`
+/ `OverrideRunStore.observeRecent` (see `OverrideSetup`); the `HomeRootView` `@FetchRequest`
+(`latestOverride`) → `state.overrides.first`; the `HistoryRootView` `@FetchRequest` → a
+`History.StateModel` observation; the LiveActivity + Watch Core Data save-notification sinks →
+`OverrideStore.observeLatest`; the 2 Nightscout upload FRCs → `observeNotYetUploadedCount`.
 
-**Cleanup parity**: `batchDeleteOlderThan(OverrideStored, days:3, isPresetKey:"isPreset")`
-and `(OverrideRunStored, "startDate", 3)` → GRDB deletes preserving presets.
+**Cleanup parity**: `batchDeleteOlderThan(OverrideStored, days:3, isPresetKey:"isPreset")` and
+`(OverrideRunStored, "startDate", 3)` → `OverrideStore.deleteOlderThan` (presets preserved) and
+`OverrideRunStore.deleteOlderThan` in `TrioApp`.
 
-**MainActor**: `calculateTarget` and `copyRunningOverride` (currently viewContext/@MainActor)
-become pure value-type functions.
+**Tests**: `OverrideStorageTests` rewritten against an in-memory GRDB pool (store/fetch/delete +
+not-yet-uploaded mapping); `TestAssembly` no longer injects a Core Data context for overrides.
+
+The Core Data `OverrideStored`/`OverrideRunStored` entities stay as the read-only migration source
+(the `OverrideStored.EventType` enum is still referenced by the Nightscout mapping).
 
 ### ⏳ After Override
 
