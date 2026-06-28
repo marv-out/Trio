@@ -52,6 +52,7 @@ final class GRDBStack {
         try await LoopStatMigration.migrateIfNeeded(into: self)
         try await TDDMigration.migrateIfNeeded(into: self)
         try await ContactImageMigration.migrateIfNeeded(into: self)
+        try await BatteryMigration.migrateIfNeeded(into: self)
     }
 
     // MARK: - Connection

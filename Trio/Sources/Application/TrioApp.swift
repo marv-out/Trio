@@ -460,7 +460,7 @@ extension Notification.Name {
         )
         async let determinationDeletion: () = coreDataStack
             .batchDeleteOlderThan(OrefDetermination.self, dateKey: "deliverAt", days: 90)
-        async let batteryDeletion: () = coreDataStack.batchDeleteOlderThan(OpenAPS_Battery.self, dateKey: "date", days: 90)
+        async let batteryDeletion: () = BatteryStore.deleteOlderThan(days: 90)
         async let carbEntryDeletion: () = coreDataStack.batchDeleteOlderThan(CarbEntryStored.self, dateKey: "date", days: 90)
         async let forecastDeletion: () = coreDataStack.batchDeleteOlderThan(Forecast.self, dateKey: "date", days: 2)
         async let forecastValueDeletion: () = coreDataStack.batchDeleteOlderThan(

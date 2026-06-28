@@ -95,7 +95,7 @@ extension Home {
         var insulinFromPersistence: [PumpEventStored] = []
         var tempBasals: [PumpEventStored] = []
         var suspendAndResumeEvents: [PumpEventStored] = []
-        var batteryFromPersistence: [OpenAPS_Battery] = []
+        var batteryFromPersistence: [BatteryRecord] = []
         var lastPumpBolus: PumpEventStored?
         var overrides: [OverrideStored] = []
         var overrideRunStored: [OverrideRunStored] = []
@@ -311,20 +311,9 @@ extension Home {
             return controller
         }()
 
-        @ObservationIgnored let batteryControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var batteryController: NSFetchedResultsController<OpenAPS_Battery> = {
-            let request = NSFetchRequest<OpenAPS_Battery>(entityName: "OpenAPS_Battery")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \OpenAPS_Battery.date, ascending: false)]
-            request.predicate = NSPredicate.predicateFor30MinAgo
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = batteryControllerDelegate
-            return controller
-        }()
+        // Battery now lives in GRDB; the current value is observed via ValueObservation
+        // instead of a Core Data NSFetchedResultsController. See BatterySetup.
+        @ObservationIgnored var batteryObservationCancellable: AnyCancellable?
 
         // TDD now lives in GRDB; the current value is observed via ValueObservation
         // instead of a Core Data NSFetchedResultsController. See CurrentTDDSetup.

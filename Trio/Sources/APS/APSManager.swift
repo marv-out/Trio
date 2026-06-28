@@ -1295,35 +1295,28 @@ private extension PumpManager {
 extension BaseAPSManager: PumpManagerStatusObserver {
     func pumpManager(_: PumpManager, didUpdate status: PumpManagerStatus, oldStatus _: PumpManagerStatus) {
         let percent = Int((status.pumpBatteryChargeRemaining ?? 1) * 100)
+        let display = status.pumpBatteryChargeRemaining != nil
 
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "storeBatteryStatus"
-        context.perform {
-            /// only update the last item with the current battery infos instead of saving a new one each time
-            let fetchRequest: NSFetchRequest<OpenAPS_Battery> = OpenAPS_Battery.fetchRequest()
-            fetchRequest.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
-            fetchRequest.predicate = NSPredicate.predicateFor30MinAgo
-            fetchRequest.fetchLimit = 1
-
+        Task {
             do {
-                let results = try context.fetch(fetchRequest)
-                let batteryToStore: OpenAPS_Battery
-
-                if let existingBattery = results.first {
-                    batteryToStore = existingBattery
+                // Update the most recent (≤30 min) entry instead of saving a new one each time.
+                if var existing = try await BatteryStore.mostRecent(since: Date.halfHourAgo) {
+                    existing.date = Date()
+                    existing.percent = Double(percent)
+                    existing.voltage = nil
+                    existing.status = percent > 10 ? "normal" : "low"
+                    existing.display = display
+                    try await BatteryStore.update(existing)
                 } else {
-                    batteryToStore = OpenAPS_Battery(context: context)
-                    batteryToStore.id = UUID()
+                    try await BatteryStore.insert(BatteryRecord(
+                        id: UUID(),
+                        date: Date(),
+                        percent: Double(percent),
+                        voltage: nil,
+                        status: percent > 10 ? "normal" : "low",
+                        display: display
+                    ))
                 }
-
-                batteryToStore.date = Date()
-                batteryToStore.percent = Double(percent)
-                batteryToStore.voltage = nil
-                batteryToStore.status = percent > 10 ? "normal" : "low"
-                batteryToStore.display = status.pumpBatteryChargeRemaining != nil
-
-                guard context.hasChanges else { return }
-                try context.save()
             } catch {
                 debug(.apsManager, "Failed to fetch or save battery: \(error)")
             }

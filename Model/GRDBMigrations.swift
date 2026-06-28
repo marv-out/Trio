@@ -76,6 +76,21 @@ extension GRDBStack {
             try db.create(index: "contactImageEntryStored_on_contactId", on: "contactImageEntryStored", columns: ["contactId"])
         }
 
+        // v4 — OpenAPS_Battery (pump battery status). Standalone, no relationships.
+        migrator.registerMigration("v4_openAPSBattery") { db in
+            try db.create(table: "openAPSBattery") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID
+                t.column("date", .datetime)
+                t.column("percent", .double)
+                t.column("voltage", .double)
+                t.column("status", .text)
+                t.column("display", .boolean)
+            }
+            // Every battery query filters/sorts on `date`.
+            try db.create(index: "openAPSBattery_on_date", on: "openAPSBattery", columns: ["date"])
+        }
+
         return migrator
     }
 }

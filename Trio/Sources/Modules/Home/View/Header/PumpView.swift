@@ -8,7 +8,7 @@ struct PumpView: View {
     let activatedAtDate: Date?
     let timerDate: Date
     let pumpStatusHighlightMessage: String?
-    let battery: [OpenAPS_Battery]
+    let battery: [BatteryRecord]
     @Environment(\.colorScheme) var colorScheme
 
     let NORMAL_PATCH_AGE = TimeInterval.hours(80)
@@ -166,7 +166,7 @@ struct PumpView: View {
             return .gray
         }
 
-        switch battery.percent {
+        switch battery.percent ?? 100 {
         case ...10:
             return Color.loopRed
         case ...20:

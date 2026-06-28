@@ -165,25 +165,20 @@ final class BaseDeviceDataManager: DeviceDataManager, Injectable {
                         string: batteryPercent >= 10 ? .normal : .low,
                         display: simulatorPump.state.pumpBatteryChargeRemaining != nil
                     )
+                    let batteryStatus = batteryPercent >= 10 ? BatteryState.normal.rawValue : BatteryState.low.rawValue
+                    let batteryDisplay = simulatorPump.state.pumpBatteryChargeRemaining != nil
                     Task {
-                        let context = CoreDataStack.shared.newTaskContext()
-                        context.name = "storeSimulatorBattery"
-                        await context.perform {
-                            let saveBatteryToCoreData = OpenAPS_Battery(context: context)
-                            saveBatteryToCoreData.id = UUID()
-                            saveBatteryToCoreData.date = Date()
-                            saveBatteryToCoreData.percent = Double(batteryPercent)
-                            saveBatteryToCoreData.voltage = nil
-                            saveBatteryToCoreData.status = batteryPercent >= 10 ? BatteryState.normal.rawValue : BatteryState
-                                .low.rawValue
-                            saveBatteryToCoreData.display = simulatorPump.state.pumpBatteryChargeRemaining != nil
-
-                            do {
-                                guard context.hasChanges else { return }
-                                try context.save()
-                            } catch {
-                                print(error.localizedDescription)
-                            }
+                        do {
+                            try await BatteryStore.insert(BatteryRecord(
+                                id: UUID(),
+                                date: Date(),
+                                percent: Double(batteryPercent),
+                                voltage: nil,
+                                status: batteryStatus,
+                                display: batteryDisplay
+                            ))
+                        } catch {
+                            debug(.deviceManager, "Failed to store simulator battery: \(error)")
                         }
                     }
                     DispatchQueue.main.async {
@@ -201,26 +196,12 @@ final class BaseDeviceDataManager: DeviceDataManager, Injectable {
                 var modifiedPreferences = settingsManager.preferences
                 modifiedPreferences.bolusIncrement = 0.1
                 storage.save(modifiedPreferences, as: OpenAPS.Settings.preferences)
-                // Remove OpenAPS_Battery entries
+                // Remove all battery entries
                 Task {
-                    let context = CoreDataStack.shared.newTaskContext()
-                    context.name = "deleteBatteryEntries"
-                    await context.perform {
-                        let fetchRequest: NSFetchRequest<OpenAPS_Battery> = OpenAPS_Battery.fetchRequest()
-
-                        do {
-                            let batteryEntries = try context.fetch(fetchRequest)
-
-                            for entry in batteryEntries {
-                                context.delete(entry)
-                            }
-
-                            guard context.hasChanges else { return }
-                            try context.save()
-
-                        } catch {
-                            debug(.deviceManager, "Failed to delete OpenAPS_Battery entries: \(error)")
-                        }
+                    do {
+                        try await BatteryStore.deleteAll()
+                    } catch {
+                        debug(.deviceManager, "Failed to delete battery entries: \(error)")
                     }
                 }
             }

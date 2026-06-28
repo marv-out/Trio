@@ -110,10 +110,28 @@ String/Int16/Bool/UUID — so `ContactImageRecord` is a plain `Codable` GRDB rec
 The Core Data `ContactImageEntryStored` entity (codeGenerationType="class") stays as the
 read-only migration source.
 
+### ✅ Step 5 — `OpenAPS_Battery` (done, this branch)
+
+Pump battery status. Broadest non-hot-path entity so far. Touched:
+
+- `BatteryRecord` + `BatteryStore` (insert, update, mostRecent, deleteAll, deleteOlderThan,
+  observeMostRecent). `voltage` (Core Data Decimal, always nil) stored as `Double?`.
+- **Upsert:** `APSManager.pumpManager(_:didUpdate:)` — fetch ≤30-min entry, update or insert.
+- **Write:** `DeviceDataManager` simulator battery → `BatteryStore.insert`.
+- **Read:** `NightscoutManager.fetchBattery` → `BatteryStore.mostRecent`.
+- **Deletes:** full-wipe on pump disconnect (`DeviceDataManager` → `deleteAll`); 90-day
+  cleanup (`TrioApp` → `deleteOlderThan`).
+- **Reactivity:** Home `batteryController` FRC → `BatteryStore.observeMostRecent()`; `PumpView`
+  and `batteryFromPersistence` now hold `[BatteryRecord]`.
+- v4 schema migration; one-time `BatteryMigration` data copy.
+- The unused `OpenAPSBattery.swift` fetch helper is now dead; left for the final CD cleanup.
+
+The Core Data `OpenAPS_Battery` entity stays as the read-only migration source.
+
 ### ⏳ Next steps (proposed order, lowest risk first)
 
-1. `OpenAPS_Battery` (FRC → ValueObservation; upsert; full-wipe + 90-day cleanup deletes) and
-   `MealPresetStored` (SwiftUI `@FetchRequest` → observation) — both have live UI.
+1. `MealPresetStored` — SwiftUI `@FetchRequest` → observation (the live-UI binding is the
+   invasive part); plus `selection: MealPresetStored?` in TreatmentsStateModel.
 2. `OverrideStored`/`OverrideRunStored`, `TempTargetStored`/`TempTargetRunStored` — has relationships + presets.
 3. `CarbEntryStored`, `DeletedGlucoseStored`.
 4. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.

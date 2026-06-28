@@ -497,39 +497,27 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     }
 
     private func fetchBattery() async -> Battery {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchBattery"
-        return await context.perform {
-            do {
-                let results = try context.fetch(OpenAPS_Battery.fetch(NSPredicate.predicateFor30MinAgo))
-                if let last = results.first {
-                    let percent: Int? = Int(last.percent)
-                    let voltage: Decimal? = last.voltage as Decimal?
-                    let status: String? = last.status
-                    let display: Bool? = last.display
+        do {
+            if let last = try await BatteryStore.mostRecent(since: Date.halfHourAgo) {
+                let percent: Int? = last.percent.map { Int($0) }
+                let voltage: Decimal? = last.voltage.map { Decimal($0) }
+                let display: Bool? = last.display
 
-                    if let status {
-                        debugPrint(
-                            "NightscoutManager: \(#function) \(DebuggingIdentifiers.succeeded) setup battery from core data successfully"
-                        )
-                        return Battery(
-                            percent: percent,
-                            voltage: voltage,
-                            string: BatteryState(rawValue: status) ?? BatteryState.unknown,
-                            display: display
-                        )
-                    }
+                if let status = last.status {
+                    return Battery(
+                        percent: percent,
+                        voltage: voltage,
+                        string: BatteryState(rawValue: status) ?? BatteryState.unknown,
+                        display: display
+                    )
                 }
-                debugPrint(
-                    "NightscoutManager: \(#function) \(DebuggingIdentifiers.succeeded) successfully fetched; but no battery data available. Returning fallback default."
-                )
-                return Battery(percent: nil, voltage: nil, string: BatteryState.error, display: nil)
-            } catch {
-                debugPrint(
-                    "NightscoutManager: \(#function) \(DebuggingIdentifiers.failed) failed to setup battery from core data"
-                )
-                return Battery(percent: nil, voltage: nil, string: BatteryState.error, display: nil)
             }
+            return Battery(percent: nil, voltage: nil, string: BatteryState.error, display: nil)
+        } catch {
+            debugPrint(
+                "NightscoutManager: \(#function) \(DebuggingIdentifiers.failed) failed to fetch battery from GRDB"
+            )
+            return Battery(percent: nil, voltage: nil, string: BatteryState.error, display: nil)
         }
     }
 
