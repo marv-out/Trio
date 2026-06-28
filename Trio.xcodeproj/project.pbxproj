@@ -424,6 +424,8 @@
 		BD00EE372FF14764005D482C /* ContactImageMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE362FF14764005D482C /* ContactImageMigration.swift */; };
 		BD00EE392FF14764005D482C /* BatteryRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE382FF14764005D482C /* BatteryRecord.swift */; };
 		BD00EE3B2FF14764005D482C /* BatteryMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE3A2FF14764005D482C /* BatteryMigration.swift */; };
+		BD00EE3D2FF14764005D482C /* MealPresetRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE3C2FF14764005D482C /* MealPresetRecord.swift */; };
+		BD00EE3F2FF14764005D482C /* MealPresetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */; };
 		BD04ECCE2D29952A008C5FEB /* BolusProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */; };
 		BD0B2EF32C5998E600B3298F /* MealPresetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD0B2EF22C5998E600B3298F /* MealPresetView.swift */; };
 		BD10516D2DA986E1007C6D89 /* PulsingLogoAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD10516C2DA986DC007C6D89 /* PulsingLogoAnimation.swift */; };
@@ -1375,6 +1377,8 @@
 		BD00EE362FF14764005D482C /* ContactImageMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactImageMigration.swift; sourceTree = "<group>"; };
 		BD00EE382FF14764005D482C /* BatteryRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryRecord.swift; sourceTree = "<group>"; };
 		BD00EE3A2FF14764005D482C /* BatteryMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryMigration.swift; sourceTree = "<group>"; };
+		BD00EE3C2FF14764005D482C /* MealPresetRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetRecord.swift; sourceTree = "<group>"; };
+		BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetMigration.swift; sourceTree = "<group>"; };
 		BD00EE1F2FF14764005D482C /* MIGRATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MIGRATION.md; sourceTree = "<group>"; };
 		BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressOverlay.swift; sourceTree = "<group>"; };
 		BD0B2EF22C5998E600B3298F /* MealPresetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetView.swift; sourceTree = "<group>"; };
@@ -3150,6 +3154,8 @@
 				BD00EE362FF14764005D482C /* ContactImageMigration.swift */,
 				BD00EE382FF14764005D482C /* BatteryRecord.swift */,
 				BD00EE3A2FF14764005D482C /* BatteryMigration.swift */,
+				BD00EE3C2FF14764005D482C /* MealPresetRecord.swift */,
+				BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */,
 				BD00EE1F2FF14764005D482C /* MIGRATION.md */,
 				BD136FAD2F6AC555002217F9 /* NSFetchedResultsControllerDelegate.swift */,
 				3BAD36CB2D7D420500CC298D /* CoreDataInitializationCoordinator.swift */,
@@ -5056,6 +5062,8 @@
 				BD00EE372FF14764005D482C /* ContactImageMigration.swift in Sources */,
 				BD00EE392FF14764005D482C /* BatteryRecord.swift in Sources */,
 				BD00EE3B2FF14764005D482C /* BatteryMigration.swift in Sources */,
+				BD00EE3D2FF14764005D482C /* MealPresetRecord.swift in Sources */,
+				BD00EE3F2FF14764005D482C /* MealPresetMigration.swift in Sources */,
 				5D16287A969E64D18CE40E44 /* PumpConfigStateModel.swift in Sources */,
 				DDF6902C2DA028D3008BF16C /* DiagnosticsStepView.swift in Sources */,
 				C2BA6B992F758E7600348E6A /* NotificationIdentifiers.swift in Sources */,

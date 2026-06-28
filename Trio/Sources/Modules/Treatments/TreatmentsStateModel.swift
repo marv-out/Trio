@@ -94,7 +94,10 @@ extension Treatments {
         var carbsRequired: Decimal?
         var useFPUconversion: Bool = false
         var dish: String = ""
-        var selection: MealPresetStored?
+        var selection: MealPresetRecord?
+        /// All saved meal presets, kept current via GRDB ValueObservation (replaces the
+        /// former SwiftUI @FetchRequest in MealPresetView).
+        var carbPresets: [MealPresetRecord] = []
         var summation: [String] = []
         var maxCarbs: Decimal = 0
         var maxFat: Decimal = 0
@@ -203,6 +206,24 @@ extension Treatments {
             debug(.bolusState, "subscribe fired")
             setupBolusStateConcurrently()
             subscribeToBolusProgress()
+            subscribeToMealPresets()
+        }
+
+        /// Keeps `carbPresets` in sync with the GRDB store (replaces @FetchRequest).
+        private func subscribeToMealPresets() {
+            MealPresetStore.observeAll()
+                .receive(on: DispatchQueue.main)
+                .sink(
+                    receiveCompletion: { completion in
+                        if case let .failure(error) = completion {
+                            debug(.default, "\(DebuggingIdentifiers.failed) Meal preset observation failed: \(error)")
+                        }
+                    },
+                    receiveValue: { [weak self] presets in
+                        self?.carbPresets = presets
+                    }
+                )
+                .store(in: &subscriptions)
         }
 
         deinit {
@@ -694,14 +715,13 @@ extension Treatments {
         // MARK: - Presets
 
         func deletePreset() {
-            if selection != nil {
-                viewContext.delete(selection!)
-
-                do {
-                    guard viewContext.hasChanges else { return }
-                    try viewContext.save()
-                } catch {
-                    print(error.localizedDescription)
+            if let pk = selection?.pk {
+                Task {
+                    do {
+                        try await MealPresetStore.delete(pk: pk)
+                    } catch {
+                        debug(.default, "Failed to delete meal preset: \(error)")
+                    }
                 }
                 carbs = 0
                 fat = 0
@@ -711,7 +731,7 @@ extension Treatments {
         }
 
         func removePresetFromNewMeal() {
-            let a = summation.firstIndex(where: { $0 == selection?.dish! })
+            let a = summation.firstIndex(where: { $0 == selection?.dish })
             if a != nil, summation[a ?? 0] != "" {
                 summation.remove(at: a!)
             }

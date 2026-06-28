@@ -1193,19 +1193,15 @@ extension SettingsExport {
                 do {
                     debug(.default, "Fetching meal presets...")
 
-                    let mealPresetData = try await viewContext.perform {
-                        let request: NSFetchRequest<MealPresetStored> = MealPresetStored.fetchRequest()
-                        let mealPresets = try self.viewContext.fetch(request)
-
-                        return mealPresets.map { preset -> (dish: String, carbs: Decimal?, fat: Decimal?, protein: Decimal?) in
+                    let mealPresetData = try await MealPresetStore.fetchAll()
+                        .map { preset -> (dish: String, carbs: Decimal?, fat: Decimal?, protein: Decimal?) in
                             (
                                 dish: preset.dish ?? "Unknown Meal",
-                                carbs: preset.carbs?.decimalValue,
-                                fat: preset.fat?.decimalValue,
-                                protein: preset.protein?.decimalValue
+                                carbs: preset.carbs,
+                                fat: preset.fat,
+                                protein: preset.protein
                             )
                         }
-                    }
 
                     debug(.default, "Found \(mealPresetData.count) meal presets")
 

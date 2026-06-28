@@ -128,10 +128,35 @@ Pump battery status. Broadest non-hot-path entity so far. Touched:
 
 The Core Data `OpenAPS_Battery` entity stays as the read-only migration source.
 
+### ✅ Step 6 — `MealPresetStored` (done, this branch)
+
+Saved meal templates. Most invasive UI so far — replaced a SwiftUI `@FetchRequest` and a
+`MealPresetStored` Picker selection. Touched:
+
+- `MealPresetRecord` (Decimals as TEXT, `Hashable` to back the Picker) + `MealPresetStore`
+  (fetchAll, insert, delete, observeAll); v5 schema; one-time `MealPresetMigration`.
+- `Treatments.StateModel`: `selection` → `MealPresetRecord?`; new `carbPresets: [MealPresetRecord]`
+  fed by `MealPresetStore.observeAll()` (replaces `@FetchRequest`); `deletePreset` → `MealPresetStore.delete`.
+- `MealPresetView`: dropped `@FetchRequest`/`moc`; Picker now binds `state.carbPresets`;
+  `savePreset` → `MealPresetStore.insert`. The `as NSDecimalNumber as Decimal` reads still
+  compile via Decimal↔NSDecimalNumber bridging, so they were left untouched.
+- `SettingsExportStateModel`: meal-preset export → `MealPresetStore.fetchAll`.
+
+The Core Data `MealPresetStored` entity stays as the read-only migration source.
+
 ### ⏳ Next steps (proposed order, lowest risk first)
 
-1. `MealPresetStored` — SwiftUI `@FetchRequest` → observation (the live-UI binding is the
-   invasive part); plus `selection: MealPresetStored?` in TreatmentsStateModel.
+1. `OverrideStored`/`OverrideRunStored`, `TempTargetStored`/`TempTargetRunStored` — relationships + presets.
+2. `CarbEntryStored`, `DeletedGlucoseStored`.
+3. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
+4. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
+5. `GlucoseStored` — highest read volume; uses `ValueObservation` for the live charts.
+
+## Cleanup (after all entities migrated & proven)
+
+- Remove the migrated entities from the Core Data model and delete their generated classes
+  and the now-dead `OpenAPSBattery.swift` fetch helper.
+- Remove `eraseDatabaseOnSchemaChange` (DEBUG-only) before shipping real data.
 2. `OverrideStored`/`OverrideRunStored`, `TempTargetStored`/`TempTargetRunStored` — has relationships + presets.
 3. `CarbEntryStored`, `DeletedGlucoseStored`.
 4. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.

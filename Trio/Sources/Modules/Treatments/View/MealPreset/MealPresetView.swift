@@ -7,7 +7,6 @@ struct MealPresetView: View {
 
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.dismiss) var dismiss
-    @Environment(\.managedObjectContext) var moc
     @Environment(AppState.self) var appState
 
     @State private var showAlert = false
@@ -21,11 +20,6 @@ struct MealPresetView: View {
     @State private var carbs: Decimal = 0
     @State private var fat: Decimal = 0
     @State private var protein: Decimal = 0
-
-    @FetchRequest(
-        entity: MealPresetStored.entity(),
-        sortDescriptors: [NSSortDescriptor(key: "dish", ascending: true)]
-    ) var carbPresets: FetchedResults<MealPresetStored>
 
     private var mealFormatter: NumberFormatter {
         let formatter = NumberFormatter()
@@ -108,9 +102,9 @@ struct MealPresetView: View {
                     minusButton
                 }
                 Picker("Preset", selection: $state.selection) {
-                    Text("Saved Food").tag(nil as MealPresetStored?)
-                    ForEach(carbPresets, id: \.self) { (preset: MealPresetStored) in
-                        Text(preset.dish ?? "").tag(preset as MealPresetStored?)
+                    Text("Saved Food").tag(nil as MealPresetRecord?)
+                    ForEach(state.carbPresets, id: \.self) { (preset: MealPresetRecord) in
+                        Text(preset.dish ?? "").tag(preset as MealPresetRecord?)
                     }
                 }
                 .onChange(of: state.selection) {
@@ -333,21 +327,21 @@ struct MealPresetView: View {
     }
 
     private func savePreset() {
-        if dish != "" {
-            let preset = MealPresetStored(context: moc)
-            preset.dish = dish
-            preset.carbs = presetCarbs as NSDecimalNumber
-            if state.useFPUconversion {
-                preset.fat = presetFat as NSDecimalNumber
-                preset.protein = presetProtein as NSDecimalNumber
-            }
-
+        guard dish != "" else { return }
+        // presetFat/presetProtein stay 0 when FPU conversion is off (the fields aren't shown),
+        // matching the former Core Data 0.0 default.
+        let record = MealPresetRecord(
+            dish: dish,
+            carbs: presetCarbs,
+            fat: presetFat,
+            protein: presetProtein
+        )
+        Task {
             do {
-                guard moc.hasChanges else { return }
-                try moc.save()
-                showAddNewPresetSheet.toggle()
-            } catch let error as NSError {
-                debugPrint("\(DebuggingIdentifiers.failed) Failed to save Meal Preset with error: \(error.userInfo)")
+                try await MealPresetStore.insert(record)
+                await MainActor.run { showAddNewPresetSheet.toggle() }
+            } catch {
+                debugPrint("\(DebuggingIdentifiers.failed) Failed to save Meal Preset: \(error)")
             }
         }
     }

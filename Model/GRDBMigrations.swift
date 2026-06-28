@@ -91,6 +91,19 @@ extension GRDBStack {
             try db.create(index: "openAPSBattery_on_date", on: "openAPSBattery", columns: ["date"])
         }
 
+        // v5 — MealPresetStored (saved meal templates). Decimals as TEXT (lossless).
+        migrator.registerMigration("v5_mealPresetStored") { db in
+            try db.create(table: "mealPresetStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("dish", .text)
+                t.column("carbs", .text)
+                t.column("fat", .text)
+                t.column("protein", .text)
+            }
+            // Listed/sorted by dish.
+            try db.create(index: "mealPresetStored_on_dish", on: "mealPresetStored", columns: ["dish"])
+        }
+
         return migrator
     }
 }
