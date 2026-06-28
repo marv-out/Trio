@@ -33,6 +33,24 @@ extension GRDBStack {
             try db.create(index: "loopStatRecord_on_end", on: "loopStatRecord", columns: ["end"])
         }
 
+        // v2 — TDDStored (Total Daily Dose aggregates). Columns mirror the Core Data
+        // attributes 1:1. Only `date` and `total` are ever read; the rest are kept for
+        // the historical record. Decimals are stored as TEXT to preserve exact values.
+        migrator.registerMigration("v2_tddStored") { db in
+            try db.create(table: "tddStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID (string form)
+                t.column("date", .datetime)
+                t.column("total", .text) // Decimal as string
+                t.column("bolus", .text)
+                t.column("tempBasal", .text)
+                t.column("scheduledBasal", .text)
+                t.column("weightedAverage", .text)
+            }
+            // Every TDD query filters/sorts on `date`.
+            try db.create(index: "tddStored_on_date", on: "tddStored", columns: ["date"])
+        }
+
         return migrator
     }
 }

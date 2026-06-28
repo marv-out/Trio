@@ -42,26 +42,18 @@ extension LiveActivityManager {
             propertiesToFetch: ["cob", "currentTarget", "deliverAt"]
         )
 
-        let tddResults = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TDDStored.self,
-            onContext: context,
-            predicate: NSPredicate.predicateFor30MinAgo,
-            key: "date",
-            ascending: false,
-            fetchLimit: 1,
-            propertiesToFetch: ["total"]
-        )
+        // TDD now lives in GRDB — fetch before the Core Data perform block.
+        let latestTDD = try await TDDStore.mostRecent(since: Date.halfHourAgo)
+        let tddValue = latestTDD?.total ?? 0
 
         return try await context.perform {
-            guard let determinationResults = results as? [[String: Any]], let tddResults = tddResults as? [[String: Any]] else {
+            guard let determinationResults = results as? [[String: Any]] else {
                 throw CoreDataError.fetchError(function: #function, file: #file)
             }
 
             guard let determination = determinationResults.first else {
                 return nil
             }
-
-            let tddValue = (tddResults.first?["total"] as? NSDecimalNumber)?.decimalValue ?? 0
 
             return DeterminationData(
                 cob: (determination["cob"] as? Int) ?? 0,

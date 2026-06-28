@@ -557,20 +557,8 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
             return
         }
 
-        let tddContext = CoreDataStack.shared.newTaskContext()
-        tddContext.name = "uploadDeviceStatus.tdd"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TDDStored.self,
-            onContext: tddContext,
-            predicate: NSPredicate.predicateFor30MinAgo,
-            key: "date",
-            ascending: false,
-            fetchLimit: 1
-        )
-
-        let tdd: Decimal? = await tddContext.perform {
-            (results as? [TDDStored])?.first?.total as? Decimal
-        }
+        // TDD now lives in GRDB.
+        let tdd: Decimal? = try await TDDStore.mostRecent(since: Date.halfHourAgo)?.total
 
         // Suggested / Enacted
         async let enactedDeterminationID = determinationStorage

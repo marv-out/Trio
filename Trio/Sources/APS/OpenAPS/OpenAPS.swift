@@ -528,17 +528,17 @@ final class OpenAPS {
     }
 
     func prepareTrioCustomOrefVariables(on context: NSManagedObjectContext) async throws -> RawJSON {
-        try await context.perform {
+        // TDD now lives in GRDB — fetch before the Core Data perform block (the block is synchronous).
+        let tenDaysAgo = Date().addingTimeInterval(-10.days.timeInterval)
+        let twoHoursAgo = Date().addingTimeInterval(-2.hours.timeInterval)
+        let tddEntries = try await TDDStore.entries(since: tenDaysAgo, positiveTotalOnly: true)
+
+        return try await context.perform {
             // Retrieve user preferences
             let userPreferences = self.storage.retrieve(OpenAPS.Settings.preferences, as: Preferences.self)
             let weightPercentage = userPreferences?.weightPercentage ?? 1.0
             let maxSMBBasalMinutes = userPreferences?.maxSMBBasalMinutes ?? 30
             let maxUAMBasalMinutes = userPreferences?.maxUAMSMBBasalMinutes ?? 30
-
-            // Fetch historical events for Total Daily Dose (TDD) calculation
-            let tenDaysAgo = Date().addingTimeInterval(-10.days.timeInterval)
-            let twoHoursAgo = Date().addingTimeInterval(-2.hours.timeInterval)
-            let historicalTDDData = try self.fetchHistoricalTDDData(from: tenDaysAgo, on: context)
 
             // Fetch the last active Override
             let activeOverrides = try self.fetchActiveOverrides(on: context)
@@ -548,17 +548,16 @@ final class OpenAPS {
             let disableSMBs = activeOverrides.first?.smbIsOff ?? false
             let overrideTargetBG = activeOverrides.first?.target?.decimalValue ?? 0
 
-            // Calculate averages for Total Daily Dose (TDD)
-            let totalTDD = historicalTDDData.compactMap { ($0["total"] as? NSDecimalNumber)?.decimalValue }.reduce(0, +)
-            let totalDaysCount = max(historicalTDDData.count, 1)
+            // Calculate averages for Total Daily Dose (TDD) from the pre-fetched GRDB entries
+            let totalTDD = tddEntries.compactMap(\.total).reduce(0, +)
+            let totalDaysCount = max(tddEntries.count, 1)
 
-            // Fetch recent TDD data for the past two hours
-            let recentTDDData = historicalTDDData.filter { ($0["date"] as? Date ?? Date()) >= twoHoursAgo }
+            // Recent TDD data for the past two hours
+            let recentTDDData = tddEntries.filter { ($0.date ?? Date()) >= twoHoursAgo }
             let recentDataCount = max(recentTDDData.count, 1)
-            let recentTotalTDD = recentTDDData.compactMap { ($0["total"] as? NSDecimalNumber)?.decimalValue }
-                .reduce(0, +)
+            let recentTotalTDD = recentTDDData.compactMap(\.total).reduce(0, +)
 
-            let currentTDD = historicalTDDData.last?["total"] as? Decimal ?? 0
+            let currentTDD = tddEntries.last?.total ?? 0
             let averageTDDLastTwoHours = recentTotalTDD / Decimal(recentDataCount)
             let averageTDDLastTenDays = totalTDD / Decimal(totalDaysCount)
             let weightedTDD = weightPercentage * averageTDDLastTwoHours + (1 - weightPercentage) * averageTDDLastTenDays
@@ -1207,17 +1206,6 @@ extension OpenAPS {
             ascending: false,
             fetchLimit: 1
         ) as? [OverrideStored] ?? []
-    }
-
-    func fetchHistoricalTDDData(from date: Date, on context: NSManagedObjectContext) throws -> [[String: Any]] {
-        try CoreDataStack.shared.fetchEntities(
-            ofType: TDDStored.self,
-            onContext: context,
-            predicate: NSPredicate(format: "date > %@ AND total > 0", date as NSDate),
-            key: "date",
-            ascending: true,
-            propertiesToFetch: ["date", "total"]
-        ) as? [[String: Any]] ?? []
     }
 
     func fetchGlucose(on context: NSManagedObjectContext) throws -> [GlucoseStored] {

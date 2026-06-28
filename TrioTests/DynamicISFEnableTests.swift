@@ -1,39 +1,37 @@
-import CoreData
 import Foundation
-import Swinject
+import GRDB
 import Testing
 
 @testable import Trio
 
 @Suite("Dynamic ISF Enable Logic Tests", .serialized) struct DynamicISFEnableTests {
-    var coreDataStack: CoreDataStack!
-    var context: NSManagedObjectContext!
+    var grdb: GRDBStack!
 
     init() async throws {
-        // In-memory Core Data for tests
-        coreDataStack = try await CoreDataStack.createForTests()
-        context = coreDataStack.newTaskContext()
+        // In-memory GRDB store for tests
+        grdb = try GRDBStack.makeInMemoryForTests()
     }
 
     func testEnableLogic(percentSamples: Double) async throws -> Bool {
         let numberOfSamples = Int(288 * 7 * percentSamples)
         let now = Date() // internal function uses Date()
 
-        try await context.perform {
+        try await grdb.pool.write { db in
             for index in 0 ..< numberOfSamples {
                 let timeDelta = Double(index * 5 * 60)
-                let tdd = TDDStored(context: context)
-                tdd.date = now - timeDelta
-                tdd.total = 30
-                tdd.bolus = 15
-                tdd.tempBasal = 15
-                tdd.scheduledBasal = 0
+                var tdd = TDDRecord(
+                    id: UUID().uuidString,
+                    date: now - timeDelta,
+                    total: 30,
+                    bolus: 15,
+                    tempBasal: 15,
+                    scheduledBasal: 0
+                )
+                try tdd.insert(db)
             }
-
-            try context.save()
         }
 
-        return try await BaseTDDStorage.hasSufficientTDD(context: context)
+        return try await BaseTDDStorage.hasSufficientTDD(in: grdb.pool)
     }
 
     @Test("Confirm samples from last 7 days enables Dynamic ISF") func testPercentSamplesEnablingLogic() async throws {

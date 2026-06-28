@@ -326,21 +326,9 @@ extension Home {
             return controller
         }()
 
-        @ObservationIgnored let tddControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var tddController: NSFetchedResultsController<TDDStored> = {
-            let request = NSFetchRequest<TDDStored>(entityName: "TDDStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \TDDStored.date, ascending: false)]
-            request.predicate = NSPredicate.predicateForOneDayAgo
-            request.fetchLimit = 1
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = tddControllerDelegate
-            return controller
-        }()
+        // TDD now lives in GRDB; the current value is observed via ValueObservation
+        // instead of a Core Data NSFetchedResultsController. See CurrentTDDSetup.
+        @ObservationIgnored var tddObservationCancellable: AnyCancellable?
 
         private var subscriptions = Set<AnyCancellable>()
 

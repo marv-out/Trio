@@ -1,5 +1,6 @@
 import CoreData
 import Foundation
+import GRDB
 import LoopKitUI
 import Swinject
 
@@ -145,24 +146,19 @@ final class BaseTDDStorage: TDDStorage, Injectable {
     /// Stores the Total Daily Dose (TDD) result in Core Data
     /// - Parameter tddResult: The TDD result to store, containing total insulin, bolus, temp basal, scheduled basal and weighted average
     func storeTDD(_ tddResult: TDDResult) async {
-        let context = makeContext()
-        context.name = "storeTDD"
-        await context.perform {
-            let tddStored = TDDStored(context: context)
-            tddStored.id = UUID()
-            tddStored.date = Date()
-            tddStored.total = NSDecimalNumber(decimal: tddResult.total)
-            tddStored.bolus = NSDecimalNumber(decimal: tddResult.bolus)
-            tddStored.tempBasal = NSDecimalNumber(decimal: tddResult.tempBasal)
-            tddStored.scheduledBasal = NSDecimalNumber(decimal: tddResult.scheduledBasal)
-            tddStored.weightedAverage = tddResult.weightedAverage.map { NSDecimalNumber(decimal: $0) }
-
-            do {
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch {
-                debug(.apsManager, "\(DebuggingIdentifiers.failed) Failed to save TDD: \(error)")
-            }
+        let record = TDDRecord(
+            id: UUID().uuidString,
+            date: Date(),
+            total: tddResult.total,
+            bolus: tddResult.bolus,
+            tempBasal: tddResult.tempBasal,
+            scheduledBasal: tddResult.scheduledBasal,
+            weightedAverage: tddResult.weightedAverage
+        )
+        do {
+            try await TDDStore.save(record)
+        } catch {
+            debug(.apsManager, "\(DebuggingIdentifiers.failed) Failed to save TDD: \(error)")
         }
     }
 
@@ -570,62 +566,25 @@ final class BaseTDDStorage: TDDStorage, Injectable {
         let tenDaysAgo = Date().addingTimeInterval(-10.days.timeInterval)
         let twoHoursAgo = Date().addingTimeInterval(-2.hours.timeInterval)
 
-        let context = makeContext()
-        context.name = "calculateWeightedAverage"
+        let recent = try await TDDStore.aggregate(since: twoHoursAgo)
+        let historical = try await TDDStore.aggregate(since: tenDaysAgo)
 
-        return try await context.perform { () -> Decimal? in
-            let recent = try Self.aggregateTDD(from: twoHoursAgo, in: context)
-            let historical = try Self.aggregateTDD(from: tenDaysAgo, in: context)
+        let historicalCount = historical.count
+        let recentCount = recent.count
+        guard historicalCount > 0 else { return 0 }
 
-            // Extract into locals so SwiftFormat's isEmpty rule doesn't
-            // mis-rewrite the tuple member access into `!tuple.isEmpty`
-            let historicalCount = historical.count
-            let recentCount = recent.count
-            guard historicalCount > 0 else { return 0 }
+        let averageTDDLastTwoHours = recent.total / max(Decimal(recentCount), 1)
+        let averageTDDLastTenDays = historical.total / Decimal(historicalCount)
 
-            let averageTDDLastTwoHours = recent.total / max(Decimal(recentCount), 1)
-            let averageTDDLastTenDays = historical.total / Decimal(historicalCount)
+        // Get weight percentage from preferences (default 0.65 if not set)
+        let userPreferences = storage.retrieve(OpenAPS.Settings.preferences, as: Preferences.self)
+        let weightPercentage = userPreferences?.weightPercentage ?? Decimal(0.65) // why is this 1 as default in trio-oref??
 
-            // Get weight percentage from preferences (default 0.65 if not set)
-            let userPreferences = self.storage.retrieve(OpenAPS.Settings.preferences, as: Preferences.self)
-            let weightPercentage = userPreferences?.weightPercentage ?? Decimal(0.65) // why is this 1 as default in trio-oref??
+        // weightedTDD = (weightPercentage × recent_average) + ((1 - weightPercentage) × historical_average)
+        let weightedTDD = weightPercentage * averageTDDLastTwoHours +
+            (1 - weightPercentage) * averageTDDLastTenDays
 
-            // weightedTDD = (weightPercentage × recent_average) + ((1 - weightPercentage) × historical_average)
-            let weightedTDD = weightPercentage * averageTDDLastTwoHours +
-                (1 - weightPercentage) * averageTDDLastTenDays
-
-            return weightedTDD.truncated(toPlaces: 3)
-        }
-    }
-
-    /// Runs a SUM(total) + COUNT aggregate on TDDStored for records with date >= `from`,
-    /// avoiding materializing hundreds of rows just to add them up.
-    private static func aggregateTDD(
-        from: Date,
-        in context: NSManagedObjectContext
-    ) throws -> (total: Decimal, count: Int) {
-        let request = NSFetchRequest<NSDictionary>(entityName: "TDDStored")
-        request.resultType = .dictionaryResultType
-        request.predicate = NSPredicate(format: "date >= %@ AND total != nil", from as NSDate)
-
-        let sumExp = NSExpressionDescription()
-        sumExp.name = "sumTotal"
-        sumExp.expression = NSExpression(forFunction: "sum:", arguments: [NSExpression(forKeyPath: "total")])
-        sumExp.expressionResultType = .decimalAttributeType
-
-        let countExp = NSExpressionDescription()
-        countExp.name = "countTotal"
-        countExp.expression = NSExpression(forFunction: "count:", arguments: [NSExpression(forKeyPath: "total")])
-        countExp.expressionResultType = .integer64AttributeType
-
-        request.propertiesToFetch = [sumExp, countExp]
-
-        guard let row = try context.fetch(request).first else {
-            return (0, 0)
-        }
-        let sum = (row["sumTotal"] as? NSDecimalNumber)?.decimalValue ?? 0
-        let count = (row["countTotal"] as? NSNumber)?.intValue ?? 0
-        return (sum, count)
+        return weightedTDD.truncated(toPlaces: 3)
     }
 
     /// Checks if there is enough Total Daily Dose (TDD) data collected over the past 7 days.
@@ -640,25 +599,23 @@ final class BaseTDDStorage: TDDStorage, Injectable {
     /// - Returns: `true` if sufficient TDD data is available, otherwise `false`.
     /// - Throws: An error if the Core Data count operation fails.
     func hasSufficientTDD() async throws -> Bool {
-        let context = makeContext()
-        context.name = "hasSufficientTDD"
-        return try await BaseTDDStorage.hasSufficientTDD(context: context)
+        let count = try await TDDStore.countWithPositiveTotal(since: Self.tddWindowStart)
+        return Self.meetsDynamicISFThreshold(count: count)
     }
 
-    /// internal function with context exposed to enable testing
-    static func hasSufficientTDD(context: NSManagedObjectContext) async throws -> Bool {
-        try await context.perform {
-            let fetchRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "TDDStored")
-            fetchRequest.predicate = NSPredicate(
-                format: "date > %@ AND total > 0",
-                Date().addingTimeInterval(-86400 * 7) as NSDate
-            )
-            fetchRequest.resultType = .countResultType
+    /// Variant that reads from an explicit pool, exposed to enable testing with an
+    /// in-memory GRDB stack.
+    static func hasSufficientTDD(in pool: DatabasePool) async throws -> Bool {
+        let count = try await TDDStore.countWithPositiveTotal(since: tddWindowStart, pool: pool)
+        return meetsDynamicISFThreshold(count: count)
+    }
 
-            let count = try context.count(for: fetchRequest)
-            let threshold = Int(Double(7 * 288) * 0.75)
-            return count >= threshold
-        }
+    /// Start of the 7-day window used by the Dynamic ISF sufficiency check.
+    static var tddWindowStart: Date { Date().addingTimeInterval(-86400 * 7) }
+
+    /// At least 75% of the expected 288 entries/day over 7 days.
+    static func meetsDynamicISFThreshold(count: Int) -> Bool {
+        count >= Int(Double(7 * 288) * 0.75)
     }
 }
 

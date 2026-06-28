@@ -72,22 +72,44 @@ it was deleted:
 
 Lightweight migration drops the now-empty `ZSTATSDATA` table on existing installs.
 
+### ✅ Step 3 — `TDDStored` (done, this branch)
+
+Total Daily Dose aggregates. Larger than the previous steps: 7 call sites, plus the first
+reactive consumer (the Home header shows the current TDD live). Touched:
+
+- **Record/store:** `TDDRecord` + `TDDStore` (save, `aggregate`, `countWithPositiveTotal`,
+  `entries`, `mostRecent`, `observeMostRecent`). Decimals stored as TEXT (lossless); the
+  weighted-average / sufficiency aggregates are computed in Swift after a windowed fetch
+  rather than via SQL `SUM` — the windows are tiny, and this avoids lossy REAL storage.
+- **Write:** `TDDStorage.storeTDD` → `TDDStore.save`.
+- **Aggregates:** `TDDStorage.calculateWeightedAverage` and `hasSufficientTDD` → `TDDStore`
+  (removed `aggregateTDD` NSExpression code and the static Core Data count variant).
+- **Reads:** `OpenAPS.prepareTrioCustomOrefVariables` (pre-fetched before the CD perform
+  block), Stat `TDDSetup`, LiveActivity `DataManager`, `NightscoutManager`.
+- **Reactivity (first ValueObservation):** Home's TDD `NSFetchedResultsController` →
+  `TDDStore.observeMostRecent()` (Combine). See `CurrentTDDSetup`.
+- **Dead code:** removed the unused duplicate `hasSufficientTDD()` in `DynamicSettingsStateModel`.
+- **Data migration:** `TDDMigration` copies existing rows once.
+- **Tests:** `DynamicISFEnableTests` rewritten against an in-memory GRDB pool via
+  `BaseTDDStorage.hasSufficientTDD(in:)`.
+
+The Core Data `TDDStored` entity stays in the model (read-only, migration source).
+
 ### ⏳ Next steps (proposed order, lowest risk first)
 
-1. `TDDStored` — reporting/aggregate data, no dosing impact.
-2. `OpenAPS_Battery`, `ContactImageEntryStored`, `MealPresetStored` — standalone, no relationships.
-3. `OverrideStored`/`OverrideRunStored`, `TempTargetStored`/`TempTargetRunStored` — has relationships + presets.
-4. `CarbEntryStored`, `DeletedGlucoseStored`.
-5. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
-6. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
-7. `GlucoseStored` — highest read volume; needs `ValueObservation` for the live charts.
+1. `OpenAPS_Battery`, `ContactImageEntryStored`, `MealPresetStored` — standalone, no relationships.
+2. `OverrideStored`/`OverrideRunStored`, `TempTargetStored`/`TempTargetRunStored` — has relationships + presets.
+3. `CarbEntryStored`, `DeletedGlucoseStored`.
+4. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
+5. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
+6. `GlucoseStored` — highest read volume; uses `ValueObservation` for the live charts.
 
 ## Open items (must solve before the hot-path entities)
 
-- **Reactivity.** Today the UI observes Core Data via persistent-history →
-  `entityChangePublisher`. GRDB's equivalent is `ValueObservation` (with a Combine
-  publisher). `LoopStat` is read on demand, so Step 1 didn't need it; glucose/determination
-  charts will. Build a reusable `ValueObservation` → Combine bridge before Step 5–7.
+- **Reactivity.** ✅ Introduced in Step 3: GRDB's `ValueObservation.publisher(in:)` replaces
+  the Core Data `NSFetchedResultsController` for live UI (TDD header). The pattern
+  (`TDDStore.observeMostRecent()` → Combine → `@MainActor` sink) is the template for the
+  glucose/determination charts in later steps.
 - **Cross-process.** Widgets / Live Activities read the store. `DatabasePool` over an
   App-Group file with WAL supports this, but observation across processes needs explicit
   handling (`DatabaseRegionObservation` + Darwin notifications). Verify before moving any

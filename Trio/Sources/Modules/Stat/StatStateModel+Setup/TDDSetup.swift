@@ -39,10 +39,14 @@ extension Stat.StateModel {
 
         // MARK: - Fetch Required Data
 
-        // Fetch data for daily statistics (TDDStored for week, month, total views)
-        let tddResults = try await fetchTDDStoredRecords(on: tddTaskContext)
+        let calendar = Calendar.current
 
-        // Fetch data for hourly statistics (BolusStored and TempBasalStored for day view)
+        // Daily statistics: TDD now comes from GRDB (value types, processed off the Core Data context)
+        let threeMonthsAgo = Date().addingTimeInterval(-3.months.timeInterval)
+        let tddRecords = try await TDDStore.entries(since: threeMonthsAgo)
+        let dailyStats = processDailyTDDs(tddRecords, calendar: calendar)
+
+        // Hourly statistics still come from Core Data (BolusStored / TempBasalStored / PumpEventStored)
         let (
             bolusResults,
             tempBasalResults,
@@ -50,19 +54,11 @@ extension Stat.StateModel {
             resumeEvents
         ) = try await fetchHourlyInsulinRecords(on: tddTaskContext)
 
-        // MARK: - Process Data on Background Context
+        // MARK: - Process Hourly Data on Background Context
 
         var hourlyStats: [TDDStats] = []
-        var dailyStats: [TDDStats] = []
 
         await tddTaskContext.perform {
-            let calendar = Calendar.current
-
-            // Process daily statistics from TDDStored
-            if let fetchedTDDs = tddResults as? [TDDStored] {
-                dailyStats = self.processDailyTDDs(fetchedTDDs, calendar: calendar)
-            }
-
             // Process hourly statistics from BolusStored and TempBasalStored
             if let fetchedBoluses = bolusResults as? [BolusStored],
                let fetchedTempBasals = tempBasalResults as? [TempBasalStored],
@@ -80,25 +76,6 @@ extension Stat.StateModel {
         }
 
         return (hourlyStats, dailyStats)
-    }
-
-    /// Fetches TDDStored records from CoreData for daily statistics
-    /// - Returns: The results of the fetch request containing TDDStored records
-    /// - Note: Fetches records from the last 3 months for week, month, and total views
-    private func fetchTDDStoredRecords(on tddTaskContext: NSManagedObjectContext) async throws -> Any {
-        // Create a predicate to fetch TDD records from the last 3 months
-        let threeMonthsAgo = Date().addingTimeInterval(-3.months.timeInterval)
-        let predicate = NSPredicate(format: "date >= %@", threeMonthsAgo as NSDate)
-
-        // Fetch TDD records from CoreData
-        return try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TDDStored.self,
-            onContext: tddTaskContext,
-            predicate: predicate,
-            key: "date",
-            ascending: true,
-            batchSize: 100
-        )
     }
 
     /// Fetches BolusStored and TempBasalStored records from CoreData for hourly statistics
@@ -462,7 +439,7 @@ extension Stat.StateModel {
     /// - Note: This method groups TDD records by day and uses only the last (most recent) entry
     ///         for each day, as this represents the complete TDD value for that day. This approach
     ///         is appropriate for week, month, and total views where we want the final daily totals.
-    private func processDailyTDDs(_ tdds: [TDDStored], calendar: Calendar) -> [TDDStats] {
+    private func processDailyTDDs(_ tdds: [TDDRecord], calendar: Calendar) -> [TDDStats] {
         // MARK: - Group TDDs by Calendar Day
 
         // Create a dictionary where keys are start-of-day dates and values are arrays of TDD entries for that day
@@ -489,7 +466,7 @@ extension Stat.StateModel {
             // MARK: - Create TDDStats from Most Recent Entry
 
             // The last entry in the sorted array contains the complete TDD for the day
-            if let lastEntry = sortedEntries.last, let total = lastEntry.total?.doubleValue {
+            if let lastEntry = sortedEntries.last, let total = lastEntry.total.map({ NSDecimalNumber(decimal: $0).doubleValue }) {
                 // Create TDDStats with the day's date and the total insulin amount
                 return TDDStats(
                     date: dayDate,

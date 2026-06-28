@@ -87,39 +87,6 @@ extension DynamicSettings {
                 dynamicSensitivityType = .disabled
             }
         }
-
-        /// Checks if there is enough Total Daily Dose (TDD) data collected over the past 7 days.
-        ///
-        /// This function performs a count fetch for TDDStored records in Core Data where:
-        /// - The record's date is within the last 7 days.
-        /// - The total value is greater than 0.
-        ///
-        /// It then checks if at least 85% of the expected data points are present,
-        /// assuming at least 288 expected entries per day (one every 5 minutes).
-        ///
-        /// - Returns: `true` if sufficient TDD data is available, otherwise `false`.
-        /// - Throws: An error if the Core Data count operation fails.
-        private func hasSufficientTDD() throws -> Bool {
-            let context = CoreDataStack.shared.newTaskContext()
-            context.name = "DynamicSettingsStateModel.hasSufficientTDD"
-
-            var result = false
-
-            context.performAndWait {
-                let fetchRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "TDDStored")
-                fetchRequest.predicate = NSPredicate(
-                    format: "date > %@ AND total > 0",
-                    Date().addingTimeInterval(-86400 * 7) as NSDate
-                )
-                fetchRequest.resultType = .countResultType
-
-                let count = (try? context.count(for: fetchRequest)) ?? 0
-                let threshold = Int(Double(7 * 288) * 0.85)
-                result = count >= threshold
-            }
-
-            return result
-        }
     }
 }
 
