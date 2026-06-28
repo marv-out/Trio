@@ -144,9 +144,46 @@ Saved meal templates. Most invasive UI so far — replaced a SwiftUI `@FetchRequ
 
 The Core Data `MealPresetStored` entity stays as the read-only migration source.
 
-### ⏳ Next steps (proposed order, lowest risk first)
+### 🔧 Step 7 — `OverrideStored` + `OverrideRunStored` (planned, not yet implemented)
 
-1. `OverrideStored`/`OverrideRunStored`, `TempTargetStored`/`TempTargetRunStored` — relationships + presets.
+The first relationship-bearing family and by far the largest surface (~18–20 files). Scoped
+for its own focused pass. Full call-site map lives in the PR notes; the design decisions:
+
+**Records**
+- `OverrideRecord` — 22 attrs; the 6 Decimals (`duration`, `end`, `smbMinutes`, `start`,
+  `target`, `uamMinutes`) stored as TEXT with a manual `FetchableRecord`/`PersistableRecord`
+  (like `TDDRecord`). `id` is a String. `pk` = rowid.
+- `OverrideRunRecord` — 7 attrs + `overridePk: Int64?` foreign key replacing the
+  `override` to-one relationship. The Nightscout `overrideRun.override?.date` traversal
+  becomes a join/lookup by `overridePk`.
+
+**Identity (replaces NSManagedObjectID passing)** — the hard part. Intents, RemoteControl
+and Watch return `[NSManagedObjectID]` and re-fetch with `existingObject(with:)` across
+process boundaries. Replace with the stable business `id` (Override: String, Run: UUID) or
+the rowid `pk`; rewrite each call site to carry that instead of an objectID. Affected:
+`OverridePresetsIntentRequest`, `TrioRemoteControl+Override`, `AppleWatchManager`,
+`AdjustmentsStateModel+Overrides`, `OverrideView`.
+
+**Store API needed**: fetchPresets (sorted by `orderPosition`), fetchActive
+(`lastActiveOverride` predicate), fetchLatestActive, lastCreated, store (with computed
+`orderPosition = count+1` for presets), copyRunning, delete(by id), reorder (batch
+`orderPosition`), enable/disable (update), saveRun (insert run + set `overridePk`),
+not-yet-uploaded fetches (Override + Run, with join), preset export, `observeActive` +
+`observeRuns` (ValueObservation → replaces the 2 FRCs and the 2 `@FetchRequest`s).
+
+**Reactivity**: Home `overrideController`/`overrideRunController` FRCs and the
+`HomeRootView`/`HistoryRootView` `@FetchRequest`s → `ValueObservation` feeding `@Observable`
+arrays (pattern from TDD/Battery/MealPreset).
+
+**Cleanup parity**: `batchDeleteOlderThan(OverrideStored, days:3, isPresetKey:"isPreset")`
+and `(OverrideRunStored, "startDate", 3)` → GRDB deletes preserving presets.
+
+**MainActor**: `calculateTarget` and `copyRunningOverride` (currently viewContext/@MainActor)
+become pure value-type functions.
+
+### ⏳ After Override
+
+1. `TempTargetStored`/`TempTargetRunStored` — same shape as Override (relationship + presets + runs).
 2. `CarbEntryStored`, `DeletedGlucoseStored`.
 3. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
 4. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
