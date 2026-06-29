@@ -131,24 +131,24 @@ extension Adjustments.StateModel {
 
     // MARK: - Override Preset Management
 
-    /// Sets up the array of Override Presets for UI display.
+    /// Subscribes the Override Presets list to GRDB (idempotent). The `ValueObservation` keeps
+    /// `overridePresets` current automatically after edits/inserts/deletes/reorders, so the former
+    /// one-shot fetch (which left the UI stale after an edit) is no longer needed. Call sites that
+    /// used to re-fetch now rely on the live feed.
     func setupOverridePresetsArray() {
-        Task {
-            do {
-                let presets = try await overrideStorage.fetchForOverridePresets()
-                await updateOverridePresetsArray(with: presets)
-            } catch {
-                debug(
-                    .default,
-                    "\(DebuggingIdentifiers.failed) Failed to setup override presets: \(error)"
-                )
-            }
-        }
-    }
-
-    /// Updates the array of Override Presets from GRDB.
-    @MainActor private func updateOverridePresetsArray(with presets: [OverrideRecord]) async {
-        overridePresets = presets
+        guard overridePresetsObservationCancellable == nil else { return }
+        overridePresetsObservationCancellable = OverrideStore.observePresets()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { completion in
+                    if case let .failure(error) = completion {
+                        debug(.default, "\(DebuggingIdentifiers.failed) Override presets observation failed: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] presets in
+                    self?.overridePresets = presets
+                }
+            )
     }
 
     /// Deletes an Override Preset (by GRDB rowid) and updates the view.

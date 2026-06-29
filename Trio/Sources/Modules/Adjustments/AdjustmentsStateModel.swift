@@ -79,6 +79,10 @@ extension Adjustments {
         // Combine
         private var cancellables = Set<AnyCancellable>()
 
+        // Override presets now live in GRDB; observed via ValueObservation so the list stays
+        // current after edits/inserts/deletes/reorders (the former one-shot fetch did not).
+        @ObservationIgnored var overridePresetsObservationCancellable: AnyCancellable?
+
         // MARK: - Lifecycle
 
         /// Subscribes to notifications and initializes settings.

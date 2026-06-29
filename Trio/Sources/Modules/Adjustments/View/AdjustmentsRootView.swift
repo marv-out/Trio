@@ -191,6 +191,43 @@ extension Adjustments {
                         Text(activation.confirmationMessage)
                     }
                 }
+                // Attached to the stable body (not inside the preset ForEach) so a list re-render —
+                // e.g. the presets ValueObservation re-emitting — can't dismiss it mid-confirmation.
+                .confirmationDialog(
+                    "Delete the Override Preset \"\(selectedOverride?.name ?? "")\"?",
+                    isPresented: $isConfirmDeletePresented,
+                    titleVisibility: .visible
+                ) {
+                    if let itemToDelete = selectedOverride {
+                        // Compare by rowid: the running override and its preset list entry can differ
+                        // in mutable fields (enabled/date), so value equality is unreliable here.
+                        let isRunningPreset = state.currentActiveOverride?.pk == selectedOverride?.pk
+                        Button(
+                            isRunningPreset ? "Stop and Delete" : "Delete",
+                            role: .destructive
+                        ) {
+                            if isRunningPreset {
+                                Task {
+                                    // Cancel ALL active Overrides (logs an OverrideRunStored entry)
+                                    await state.disableAllActiveOverrides(createOverrideRunEntry: true)
+                                }
+                            }
+                            Task {
+                                if let pk = itemToDelete.pk {
+                                    await state.invokeOverridePresetDeletion(pk)
+                                }
+                            }
+                            selectedOverride = nil
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {
+                        selectedOverride = nil
+                    }
+                } message: {
+                    if state.currentActiveOverride?.pk == selectedOverride?.pk {
+                        Text("This override preset is currently running. Deleting will stop it.")
+                    }
+                }
             }).background(appState.trioBackgroundColor(for: colorScheme))
         }
 

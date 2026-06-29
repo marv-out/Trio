@@ -27,45 +27,6 @@ extension Adjustments.RootView {
                 }
             }
             .onMove(perform: state.reorderOverride)
-            .confirmationDialog(
-                "Delete the Override Preset \"\(selectedOverride?.name ?? "")\"?",
-                isPresented: $isConfirmDeletePresented,
-                titleVisibility: .visible
-            ) {
-                if let itemToDelete = selectedOverride {
-                    // Compare by rowid: the running override and its preset list entry can differ in
-                    // mutable fields (enabled/date), so value equality is unreliable here.
-                    let isRunningPreset = state.currentActiveOverride?.pk == selectedOverride?.pk
-                    Button(
-                        isRunningPreset ? "Stop and Delete" : "Delete",
-                        role: .destructive
-                    ) {
-                        if isRunningPreset {
-                            Task {
-                                // Save cancelled Override in OverrideRunStored Entity
-                                // Cancel ALL active Override
-                                await state.disableAllActiveOverrides(createOverrideRunEntry: true)
-                            }
-                        }
-                        // Perform the delete action
-                        Task {
-                            if let pk = itemToDelete.pk {
-                                await state.invokeOverridePresetDeletion(pk)
-                            }
-                        }
-                        // Reset the selected item after deletion
-                        selectedOverride = nil
-                    }
-                }
-                Button("Cancel", role: .cancel) {
-                    // Dismiss the dialog without action
-                    selectedOverride = nil
-                }
-            } message: {
-                if state.currentActiveOverride?.pk == selectedOverride?.pk {
-                    Text("This override preset is currently running. Deleting will stop it.")
-                }
-            }
             .listRowBackground(Color.chart)
         } header: {
             Text("Override Presets")
