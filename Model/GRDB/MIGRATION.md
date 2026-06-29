@@ -190,13 +190,108 @@ not-yet-uploaded mapping); `TestAssembly` no longer injects a Core Data context 
 The Core Data `OverrideStored`/`OverrideRunStored` entities stay as the read-only migration source
 (the `OverrideStored.EventType` enum is still referenced by the Nightscout mapping).
 
-### ⏳ After Override
+### 🔧 Step 8 — `TempTargetStored` + `TempTargetRunStored` (planned, not yet implemented)
 
-1. `TempTargetStored`/`TempTargetRunStored` — same shape as Override (relationship + presets + runs).
-2. `CarbEntryStored`, `DeletedGlucoseStored`.
-3. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
-4. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
-5. `GlucoseStored` — highest read volume; uses `ValueObservation` for the live charts.
+Same family shape as Override (relationship + presets + runs), so **mirror Step 7** — read the
+`OverrideRecord.swift` / `OverrideStorage.swift` / Override call-site diff first; this is largely the
+same transformation. The deltas below are what makes Temp Targets *different* — get these right and
+the rest is a copy of Override. Full call-site map (line-level) lives in the PR notes.
+
+**Records (`Model/GRDB/TempTargetRecord.swift`)**
+- `TempTargetRecord` — attrs: `id` (**UUID**, stored as TEXT like `OverrideRunRecord.id` — *not* a
+  String like Override), `name`, `date`, `enabled`, `isPreset`, `isUploadedToNS`, `orderPosition`,
+  `enteredBy` (String), and **3 Decimals** as TEXT: `duration`, `target`, `halfBasalTarget`. No
+  percentage/smb/isf/cr fields. Manual `FetchableRecord`/`MutablePersistableRecord` (use
+  `MutablePersistableRecord` so `didInsert` sets `pk` — see the Override note below).
+- `TempTargetRunRecord` — `id` (UUID), `name`, `startDate`, `endDate`, `isUploadedToNS`,
+  `target` (Decimal), `tempTargetPk: Int64?` foreign key (replaces the `tempTarget` to-one).
+- ⚠️ **`MutablePersistableRecord`, not `PersistableRecord`.** Step 7 found that `PersistableRecord`'s
+  `didInsert` is non-mutating, so `pk` is never set after insert; the store returns records whose
+  `pk` is read by callers, so the record must be `MutablePersistableRecord`. (TDD/MealPreset got away
+  with `PersistableRecord` only because they never read `pk` back.)
+
+**Schema v7 + `TempTargetMigration`** — `tempTargetStored` + `tempTargetRunStored` tables; indexes on
+`date`, `isPreset`, `enabled`, run `startDate`, and `tempTargetPk` (FK `ON DELETE SET NULL`). The
+one-time copy resolves the `tempTarget` relationship via legacy `NSManagedObjectID` → new `pk` (the
+`id` is **not** unique — `copyRunningTempTarget` duplicates it, same as Override). Register in
+`GRDBStack.bootstrap()` after `OverrideMigration`, gated by `grdb.didMigrateTempTarget`.
+
+**Predicates differ from Override:**
+- `lastActiveTempTarget` = `date >= oneDayAgo AND enabled == true` — **no `indefinite`** (Temp
+  Targets have none).
+- `tempTargetsForMainChart` = active **OR** *future-scheduled* (`date >= now AND enabled == false`).
+  The Home chart FRC uses this broader predicate, so `TempTargetStore.observeForMainChart()` must
+  track both active and future-scheduled rows (subscriber applies the date rules; keep the tracked
+  region deterministic — no `Date()` inside it).
+
+**Scheduled Temp Targets (no Override analog).** `fetchScheduledTempTargets()` (`date > now`),
+`fetchScheduledTempTarget(for:)` (`date == targetDate`), and `existsTempTarget(with:)` (`date ==`,
+used by `FetchTreatmentsManager` to dedupe NS imports). `Adjustments.StateModel` keeps a separate
+`scheduledTempTargets` array + `setupScheduledTempTargetsArray` (→ `observeScheduled()`), and the
+`saveScheduledTempTarget` → `enableScheduledTempTarget(for date:)` flow re-fetches by exact date.
+
+**FileStorage coexistence (leave untouched).** `BaseTempTargetsStorage` *also* persists to a JSON
+`FileStorage` (`recent()`, `current()`, `presets()`, `saveTempTargetsToStorage`) — these are **not**
+Core Data and stay as-is. Mutating call sites call `saveTempTargetsToStorage(...)` *in addition* to
+the Core Data write; keep those calls. Only the `TempTargetStored`/`TempTargetRunStored` Core Data
+paths move to GRDB.
+
+**Half-basal-target quirks (preserve exactly).** `storeTempTarget` nulls `halfBasalTarget` then sets
+it only if it differs from `settingsManager.preferences.halfBasalExerciseTarget`.
+`copyRunningTempTarget` keeps `halfBasalTarget` only if `!= 160` (the HBT default; `TempTarget.cancel`
+also uses `160`). Carry these into the store/storage layer verbatim.
+
+**Store API** (`TempTargetStore` / `TempTargetRunStore`): fetchPresets (orderPosition),
+fetchActiveConfigurations(limit:) (`lastActiveTempTarget`), fetchForMainChart, fetchScheduled,
+fetchScheduled(for:), exists(date:), store (computed `orderPosition` for presets), copyRunning,
+update, disable(pks:), delete, deleteOlderThan (presets preserved), reorder, markUploaded(ids:[UUID]),
+fetchNotYetUploaded, saveRun, and observations: `observeForMainChart`, `observePresets`,
+`observeScheduled`, `observeLatest`, `observeNotYetUploadedCount`. For the Nightscout run upload, the
+run needs the source temp target's `enteredBy`/`name`/`date` — add a FK lookup helper returning the
+source `TempTargetRecord` (Override only needed `date`).
+
+**Identity / centralization (as in Step 7).** `TempTargetsStorage` deals in records; drop
+`[NSManagedObjectID]`. Centralize `disableAllActiveTempTargets(except:createRunEntry:)`,
+`enactTempTarget(pk:)`, `cancelTempTarget(pk:)`, `saveTempTargetRun(for:)` in the storage.
+`copyRunningTempTarget` becomes a pure value-type function. The generic `fetchTempTargetObjects` /
+`fetchFunction` objectID-unpacking helper in `AdjustmentsStateModel+TempTargets` goes away (fetches
+return records). `PendingPresetActivation.tempTarget(objectID:)` → `.tempTarget(pk: Int64, …)`.
+
+**Reactivity / call sites** (mirror Step 7 — ~19 files):
+- `HomeStateModel` `tempTargetController`/`tempTargetRunController` FRCs → `observeForMainChart` /
+  `TempTargetRunStore.observeRecent` (see a new `TempTargetSetup`). `tempTargetStored` →
+  `[TempTargetRecord]`, `tempTargetRunStored` → `[TempTargetRunRecord]`.
+- `HomeRootView` `latestTempTarget` `@FetchRequest` (uses the **narrower** `lastActiveTempTarget`) →
+  ⚠️ do **not** just use `state.tempTargetStored.first` (that list includes future-scheduled rows).
+  Derive the active one (`enabled && date <= now`) or expose a dedicated active value. Update
+  `cancelTempTarget(withID:)` → `withPk:` and the `.objectID` cancel sites + `tempTargetString`
+  (Decimals are now `Decimal?`, drop `.decimalValue`).
+- `TempTargets.swift` chart: `[TempTargetRecord]`/`[TempTargetRunRecord]`, drop `viewContext` +
+  the `MainChartHelper.calculateDuration/Target(objectID:…)` calls (read `duration`/`target` off the
+  record; `duration` minutes → seconds `*60`).
+- `History`: `tempTargetRunStored` `@FetchRequest` → `History.StateModel` observation;
+  `HistoryRootView+Adjustments` temp-target `AdjustmentItem.id` `objectID` → `tempTarget.id` (UUID).
+- `Adjustments`: `tempTargetPresets`/`scheduledTempTargets`/`currentActiveTempTarget` → records;
+  `reorderTempTargets` → `TempTargetStore.reorder`; `EditTempTargetForm` (`@ObservedObject
+  tempTarget: TempTargetStored` → value `TempTargetRecord`, save via `TempTargetStore.update`).
+- `Nightscout`: 2 upload FRCs → `observeNotYetUploadedCount`; `updateTempTargets/RunsAsUploaded` →
+  `markUploaded(ids:)`. Mapping stays `NightscoutTreatment(.nsTempTarget)` (targetTop/Bottom = target).
+- `TempPresetsIntentRequest`, `TrioRemoteControl+TempTarget`, `AppleWatchManager` (TT presets +
+  observer + activate/cancel handlers), `OpenAPS.fetchActiveTempTargets` (pre-fetch before the CD
+  perform block), `LiveActivity` `DataManager.fetchAndMapTempTarget` + the `LiveActivityManager`
+  TempTargetStored observer (→ `observeLatest`), `SettingsExportStateModel` preset export.
+
+**Cleanup parity / tests.** `TrioApp` `batchDeleteOlderThan(TempTargetStored, isPresetKey:)` /
+`(TempTargetRunStored, "startDate")` → store `deleteOlderThan`. Rewrite any `TempTargetStorageTests`
+against an in-memory pool; `TestAssembly` drops the Core Data `contextProvider` for the TT storage
+(but keeps the `FileStorage`/`Broadcaster`/`SettingsManager` injections).
+
+### ⏳ After Temp Targets
+
+1. `CarbEntryStored`, `DeletedGlucoseStored`.
+2. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
+3. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
+4. `GlucoseStored` — highest read volume; uses `ValueObservation` for the live charts.
 
 ## Cleanup (after all entities migrated & proven)
 
