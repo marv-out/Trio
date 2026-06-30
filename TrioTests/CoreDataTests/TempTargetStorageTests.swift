@@ -1,149 +1,91 @@
-import CoreData
 import Foundation
-import Swinject
+import GRDB
 import Testing
 
 @testable import Trio
 
-@Suite("TempTargetStorage Tests", .serialized) struct TempTargetsStorageTests: Injectable {
-    @Injected() var storage: TempTargetsStorage!
-    let resolver: Resolver
-    var coreDataStack: CoreDataStack!
-    var testContext: NSManagedObjectContext!
+@Suite("TempTargetStorage Tests", .serialized) struct TempTargetsStorageTests {
+    var grdb: GRDBStack!
 
     init() async throws {
-        // Create test context
-        coreDataStack = try await CoreDataStack.createForTests()
-        testContext = coreDataStack.newTaskContext()
-
-        // Create assembler with test assembly
-        let assembler = Assembler([
-            StorageAssembly(),
-            ServiceAssembly(),
-            APSAssembly(),
-            NetworkAssembly(),
-            UIAssembly(),
-            SecurityAssembly(),
-            TestAssembly(testContext: testContext) // Add our test assembly last to override TempTargetStorage
-        ])
-
-        resolver = assembler.resolver
-        injectServices(resolver)
-    }
-
-    @Test("Storage is correctly initialized") func testStorageInitialization() {
-        // Verify storage exists
-        #expect(storage != nil, "TempTargetsStorage should be injected")
-
-        // Verify it's the correct type
-        #expect(
-            storage is BaseTempTargetsStorage, "Storage should be of type BaseTempTargetsStorage"
-        )
+        // In-memory GRDB store for tests (mirrors OverrideStorageTests).
+        grdb = try GRDBStack.makeInMemoryForTests()
     }
 
     @Test("Store and retrieve temp target") func testStoreAndRetrieveTempTarget() async throws {
-        // Given
-        let testTarget = TempTarget(
+        let record = TempTargetRecord(
+            id: UUID(),
             name: "Test Target",
-            createdAt: Date(),
-            targetTop: 120,
-            targetBottom: 120,
-            duration: 60,
-            enteredBy: "Test",
-            reason: "Testing",
+            date: Date(),
+            enabled: false,
             isPreset: false,
-            halfBasalTarget: 160
-        )
-
-        // When
-        try await storage.storeTempTarget(tempTarget: testTarget)
-
-        // Then verify stored entries
-        let storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: TempTargetStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "name == %@", "Test Target"),
-            key: "date",
-            ascending: false
-        ) as? [TempTargetStored]
-
-        #expect(storedEntries?.isEmpty == false, "Should have stored entries")
-        #expect(storedEntries?.count == 1, "Should have exactly one entry")
-        let storedTarget = storedEntries?.first
-        #expect(storedTarget?.name == "Test Target", "Name should match")
-        #expect(storedTarget?.target == 120, "Target should match")
-        #expect(storedTarget?.duration == 60, "Duration should match")
-    }
-
-    @Test("Delete temp target Preset") func testDeleteTempTarget() async throws {
-        // Given
-        let testTarget = TempTarget(
-            name: "Delete Test",
-            createdAt: Date(),
-            targetTop: 120,
-            targetBottom: 120,
             duration: 60,
-            enteredBy: "Test",
-            reason: "Testing deletion of a preset",
-            isPreset: true,
+            target: 120,
             halfBasalTarget: 160
         )
-        // Store the target
-        try await storage.storeTempTarget(tempTarget: testTarget)
 
-        // Get the stored target's ObjectID
-        let storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: TempTargetStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "name == %@", "Delete Test"),
-            key: "date",
-            ascending: false
-        ) as? [TempTargetStored]
+        try await TempTargetStore.store(record, pool: grdb.pool)
 
-        guard let objectID = storedEntries?.first?.objectID else {
-            throw TestError("Failed to get stored target's ObjectID")
+        let stored = try await grdb.pool.read { db in
+            try TempTargetRecord.filter(TempTargetRecord.Columns.id == record.id!.uuidString).fetchAll(db)
         }
 
-        // When
-        await storage.deleteTempTargetPreset(objectID)
-
-        // Then verify deletion
-        let remainingEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: TempTargetStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "name == %@", "Delete Test"),
-            key: "date",
-            ascending: false
-        ) as? [TempTargetStored]
-
-        #expect(remainingEntries?.isEmpty == true, "Should have no entries after deletion")
+        #expect(stored.count == 1, "Should have exactly one entry")
+        #expect(stored.first?.name == "Test Target", "Name should match")
+        #expect(stored.first?.target == 120, "Target should match")
+        #expect(stored.first?.duration == 60, "Duration should match")
+        #expect(stored.first?.isPreset == false, "isPreset should match")
     }
 
-    @Test("Get temp targets not yet uploaded to Nightscout") func testGetTempTargetsNotYetUploadedToNightscout() async throws {
-        // Given
-        let testTarget = TempTarget(
-            name: "NS Test",
-            createdAt: Date(),
-            targetTop: 120,
-            targetBottom: 120,
-            duration: 45,
-            enteredBy: "Test",
-            reason: "Testing NS Upload",
+    @Test("Store temp target preset assigns orderPosition") func testStoreAndRetrievePreset() async throws {
+        let preset = TempTargetRecord(
+            id: UUID(),
+            name: "Test Preset",
+            date: Date(),
             isPreset: true,
-            enabled: true,
-            halfBasalTarget: 160
+            target: 110
         )
 
-        // When
-        try await storage.storeTempTarget(tempTarget: testTarget)
-        let notUploadedTargets = try await storage.getTempTargetsNotYetUploadedToNightscout()
+        try await TempTargetStore.store(preset, pool: grdb.pool)
+        let presets = try await TempTargetStore.fetchPresets(pool: grdb.pool)
 
-        // Then
-        #expect(!notUploadedTargets.isEmpty, "Should have targets not uploaded to NS")
-        let target = notUploadedTargets[0]
-        #expect(target.eventType == .nsTempTarget, "Event type should be NS temp target")
-        #expect(target.duration == 45, "Duration should match")
-        #expect(target.targetTop == 120, "Target top should match target")
-        #expect(target.targetBottom == 120, "Target bottom should match target")
+        #expect(presets.count == 1, "Should have stored preset")
+        let stored = presets.first { $0.name == "Test Preset" }
+        #expect(stored != nil, "Should find the test preset")
+        #expect(stored?.isPreset == true, "Should be marked as preset")
+        #expect(stored?.target == 110, "Target should match")
+        #expect(stored?.orderPosition == 1, "First preset should get orderPosition 1")
+    }
+
+    @Test("Delete temp target preset") func testDeleteTempTargetPreset() async throws {
+        let preset = TempTargetRecord(id: UUID(), name: "Delete Test", date: Date(), isPreset: true)
+        let stored = try await TempTargetStore.store(preset, pool: grdb.pool)
+
+        try await TempTargetStore.delete(pk: stored.pk!, pool: grdb.pool)
+
+        let remaining = try await TempTargetStore.fetchPresets(pool: grdb.pool)
+        #expect(remaining.isEmpty, "Should have no entries after deletion")
+    }
+
+    @Test("Get temp targets not yet uploaded to Nightscout") func testGetTempTargetsNotYetUploaded() async throws {
+        let record = TempTargetRecord(
+            id: UUID(),
+            name: "NS Test",
+            date: Date(),
+            enabled: true, // only active, not-yet-uploaded temp targets are returned
+            isPreset: true,
+            isUploadedToNS: false,
+            duration: 45,
+            target: 120
+        )
+
+        try await TempTargetStore.store(record, pool: grdb.pool)
+
+        let notUploaded = try await TempTargetStore.fetchNotYetUploaded(pool: grdb.pool)
+
+        #expect(!notUploaded.isEmpty, "Should have temp targets not uploaded to NS")
+        #expect(notUploaded[0].name == "NS Test", "Temp target name should match")
+        #expect(notUploaded[0].duration == 45, "Duration should match")
+        #expect(notUploaded[0].target == 120, "Target should match")
     }
 }

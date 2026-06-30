@@ -1,13 +1,11 @@
 import Charts
-import CoreData
 import Foundation
 import SwiftUI
 
 struct TempTargetView: ChartContent {
-    let tempTargetStored: [TempTargetStored]
-    let tempTargetRunStored: [TempTargetRunStored]
+    let tempTargetStored: [TempTargetRecord]
+    let tempTargetRunStored: [TempTargetRunRecord]
     let units: GlucoseUnits
-    let viewContext: NSManagedObjectContext
 
     var body: some ChartContent {
         drawActiveTempTargets()
@@ -16,25 +14,21 @@ struct TempTargetView: ChartContent {
 
     private func drawActiveTempTargets() -> some ChartContent {
         ForEach(tempTargetStored) { tt in
-            if let duration = MainChartHelper.calculateDuration(
-                objectID: tt.objectID,
-                attribute: "duration",
-                context: viewContext
-            ) {
+            // `duration` is in minutes; convert to seconds. A 0/nil duration or target is skipped,
+            // mirroring the former `MainChartHelper.calculateDuration/Target` (which returned nil).
+            if let durationMinutes = tt.duration, durationMinutes != 0,
+               let target = tt.target, target != 0
+            {
                 let start: Date = tt.date ?? .distantPast
-                let end: Date = start.addingTimeInterval(duration)
+                let end: Date = start.addingTimeInterval(TimeInterval(truncating: (durationMinutes * 60) as NSNumber))
 
-                if let target = MainChartHelper
-                    .calculateTarget(objectID: tt.objectID, attribute: "target", context: viewContext)
-                {
-                    RuleMark(
-                        xStart: .value("Start", start, unit: .second),
-                        xEnd: .value("End", end, unit: .second),
-                        y: .value("Value", units == .mgdL ? target : target.asMmolL)
-                    )
-                    .foregroundStyle(Color.green.opacity(0.4))
-                    .lineStyle(.init(lineWidth: 8))
-                }
+                RuleMark(
+                    xStart: .value("Start", start, unit: .second),
+                    xEnd: .value("End", end, unit: .second),
+                    y: .value("Value", units == .mgdL ? target : target.asMmolL)
+                )
+                .foregroundStyle(Color.green.opacity(0.4))
+                .lineStyle(.init(lineWidth: 8))
             }
         }
     }
@@ -43,7 +37,7 @@ struct TempTargetView: ChartContent {
         ForEach(tempTargetRunStored) { tt in
             let start: Date = tt.startDate ?? .distantPast
             let end: Date = tt.endDate ?? Date()
-            let target = tt.target?.decimalValue ?? 100
+            let target = tt.target ?? 100
             RuleMark(
                 xStart: .value("Start", start, unit: .second),
                 xEnd: .value("End", end, unit: .second),

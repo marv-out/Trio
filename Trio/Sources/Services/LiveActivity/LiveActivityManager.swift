@@ -146,9 +146,15 @@ final class LiveActivityData: ObservableObject {
             )
             .store(in: &subscriptions)
 
-        coreDataPublisher?.filteredByEntityName("TempTargetStored").sink { [weak self] _ in
-            Task { await self?.loadTempTarget() }
-        }.store(in: &subscriptions)
+        // Temp targets moved to GRDB; observe the store instead of the Core Data save notification.
+        TempTargetStore.observeLatest()
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] _ in
+                    Task { await self?.loadTempTarget() }
+                }
+            )
+            .store(in: &subscriptions)
 
         coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
             Task { await self?.loadGlucose() }

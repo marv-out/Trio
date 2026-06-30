@@ -1,24 +1,26 @@
 import Combine
-import CoreData
 import Foundation
 
 extension Adjustments.StateModel {
     // MARK: - State Initialization and Updates
 
-    /// Updates the latest Temp Target configuration for UI state and logic.
-    /// First get the latest Temp Target corresponding NSManagedObjectID with a background fetch
-    /// Then unpack it on the view context and update the State variables which can be used on in the View for some Logic
-    /// This also needs to be called when we cancel an Temp Target via the Home View to update the State of the Button for this case
+    /// Updates the latest Temp Target configuration and state.
+    /// Fetches the latest active Temp Target (value type — no `NSManagedObjectID` round-trip) and
+    /// updates the State variables the View relies on. Also called when a Temp Target is cancelled
+    /// from the Home View to refresh the button state.
     func updateLatestTempTargetConfiguration() {
-        Task {
+        Task { [weak self] in
             do {
-                let id = try await tempTargetStorage.loadLatestTempTargetConfigurations(fetchLimit: 1)
-                async let updateState: () = updateLatestTempTargetConfigurationOfState(from: id)
-                async let setTempTarget: () = setCurrentTempTarget(from: id)
-                _ = await (updateState, setTempTarget)
+                guard let self = self else { return }
+
+                let latest = try await self.tempTargetStorage.loadLatestTempTargetConfigurations(fetchLimit: 1)
+
+                // execute sequentially instead of concurrently
+                await self.updateLatestTempTargetConfigurationOfState(from: latest)
+                await self.setCurrentTempTarget(from: latest)
 
                 // perform determine basal sync to immediately apply temp target changes
-                try await apsManager.determineBasalSync()
+                try await self.apsManager.determineBasalSync()
             } catch {
                 debug(
                     .default,
@@ -29,92 +31,63 @@ extension Adjustments.StateModel {
     }
 
     /// Updates state variables with the latest Temp Target configuration.
-    @MainActor func updateLatestTempTargetConfigurationOfState(from IDs: [NSManagedObjectID]) async {
-        do {
-            let result = try IDs.compactMap { id in
-                try viewContext.existingObject(with: id) as? TempTargetStored
-            }
-            isTempTargetEnabled = result.first?.enabled ?? false
-            if !isOverrideEnabled {
-                await resetTempTargetState()
-            }
-        } catch {
-            debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update latest temp target configuration")
+    @MainActor func updateLatestTempTargetConfigurationOfState(from records: [TempTargetRecord]) async {
+        isTempTargetEnabled = records.first?.enabled ?? false
+        if !isOverrideEnabled {
+            await resetTempTargetState()
         }
     }
 
     /// Sets the current Temp Target for UI and logic purposes.
-    @MainActor func setCurrentTempTarget(from IDs: [NSManagedObjectID]) async {
-        do {
-            guard let firstID = IDs.first else {
-                activeTempTargetName = "Custom Temp Target"
-                currentActiveTempTarget = nil
-                return
-            }
-
-            if let tempTargetToEdit = try viewContext.existingObject(with: firstID) as? TempTargetStored {
-                currentActiveTempTarget = tempTargetToEdit
-                activeTempTargetName = tempTargetToEdit.name ?? String(localized: "Custom Temp Target")
-                tempTargetTarget = tempTargetToEdit.target?.decimalValue ?? 0
-            }
-        } catch {
-            debugPrint(
-                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to set active preset name with error: \(error)"
-            )
+    @MainActor func setCurrentTempTarget(from records: [TempTargetRecord]) async {
+        guard let first = records.first else {
+            activeTempTargetName = "Custom Temp Target"
+            currentActiveTempTarget = nil
+            return
         }
+        currentActiveTempTarget = first
+        activeTempTargetName = first.name ?? String(localized: "Custom Temp Target")
+        tempTargetTarget = first.target ?? 0
     }
 
     // MARK: - Temp Target Fetching and Setup
 
-    /// Sets up Temp Targets using fetch and update functions.
-    func setupTempTargets(
-        fetchFunction: @escaping () async throws -> [NSManagedObjectID],
-        updateFunction: @escaping @MainActor([TempTargetStored]) -> Void
-    ) {
-        Task {
-            do {
-                let ids = try await fetchFunction()
-                let tempTargetObjects = await fetchTempTargetObjects(for: ids)
-                await updateFunction(tempTargetObjects)
-            } catch {
-                debug(
-                    .default,
-                    "\(DebuggingIdentifiers.failed) Failed to setup temp targets: \(error)"
-                )
-            }
-        }
-    }
-
-    /// Fetches Temp Target objects from Core Data.
-    @MainActor private func fetchTempTargetObjects(for IDs: [NSManagedObjectID]) async -> [TempTargetStored] {
-        do {
-            return try IDs.compactMap { id in
-                try viewContext.existingObject(with: id) as? TempTargetStored
-            }
-        } catch {
-            debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to fetch Temp Targets")
-            return []
-        }
-    }
-
-    /// Sets up the Temp Target presets array for the view.
+    /// Subscribes the Temp Target Presets list to GRDB (idempotent). The `ValueObservation` keeps
+    /// `tempTargetPresets` current automatically after edits/inserts/deletes/reorders, so the former
+    /// one-shot fetch (which left the UI stale after an edit) is no longer needed.
     func setupTempTargetPresetsArray() {
-        setupTempTargets(
-            fetchFunction: { try await self.tempTargetStorage.fetchForTempTargetPresets() },
-            updateFunction: { tempTargets in
-                self.tempTargetPresets = tempTargets
-            }
-        )
+        guard tempTargetPresetsObservationCancellable == nil else { return }
+        tempTargetPresetsObservationCancellable = TempTargetStore.observePresets()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { completion in
+                    if case let .failure(error) = completion {
+                        debug(.default, "\(DebuggingIdentifiers.failed) Temp target presets observation failed: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] presets in
+                    self?.tempTargetPresets = presets
+                }
+            )
     }
 
-    /// Sets up the scheduled Temp Targets array for the view.
+    /// Subscribes the scheduled (future-dated) Temp Targets list to GRDB (idempotent). The
+    /// `date > now` rule is applied in the sink so the tracked region stays deterministic.
     func setupScheduledTempTargetsArray() {
-        setupTempTargets(
-            fetchFunction: { try await self.tempTargetStorage.fetchScheduledTempTargets() },
-            updateFunction: { tempTargets in
-                self.scheduledTempTargets = tempTargets
-            }
-        )
+        guard scheduledTempTargetsObservationCancellable == nil else { return }
+        scheduledTempTargetsObservationCancellable = TempTargetStore.observeScheduled()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { completion in
+                    if case let .failure(error) = completion {
+                        debug(.default, "\(DebuggingIdentifiers.failed) Scheduled temp targets observation failed: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] records in
+                    let now = Date()
+                    self?.scheduledTempTargets = records.filter { ($0.date ?? .distantPast) > now }
+                }
+            )
     }
 
     // MARK: - Temp Target Creation and Management
@@ -166,26 +139,15 @@ extension Adjustments.StateModel {
     /// Enables a scheduled Temp Target for a specific date.
     func enableScheduledTempTarget(for date: Date) async {
         do {
-            let ids = try await tempTargetStorage.fetchScheduledTempTarget(for: date)
-            guard let firstID = ids.first else {
+            guard let scheduled = try await tempTargetStorage.fetchScheduledTempTarget(for: date), let pk = scheduled.pk
+            else {
                 debug(.default, "No Temp Target found for the specified date.")
                 return
             }
-            await setCurrentTempTarget(from: ids)
 
-            try await MainActor.run {
-                guard let tempTarget = try viewContext.existingObject(with: firstID) as? TempTargetStored else {
-                    throw NSError(
-                        domain: "TempTarget",
-                        code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Failed to find temp target"]
-                    )
-                }
-
-                tempTarget.enabled = true
-                try viewContext.save()
-                isTempTargetEnabled = true
-            }
+            guard let enacted = try await tempTargetStorage.enactTempTarget(pk: pk) else { return }
+            await setCurrentTempTarget(from: [enacted])
+            await MainActor.run { isTempTargetEnabled = true }
 
             setupScheduledTempTargetsArray()
         } catch {
@@ -257,30 +219,24 @@ extension Adjustments.StateModel {
         setupTempTargetPresetsArray()
     }
 
-    /// Enacts a Temp Target preset by enabling it.
-    @MainActor func enactTempTargetPreset(withID id: NSManagedObjectID) async {
+    /// Enacts a Temp Target preset (by GRDB rowid) by enabling it and disabling others.
+    @MainActor func enactTempTargetPreset(withPk pk: Int64) async {
         do {
-            guard let tempTargetToEnact = try viewContext.existingObject(with: id) as? TempTargetStored else { return }
             /// Wait for currently active temp target to be disabled before storing the new temp target
             await disableAllActiveTempTargets(createTempTargetRunEntry: true)
             await resetTempTargetState()
 
-            tempTargetToEnact.enabled = true
-            tempTargetToEnact.date = Date()
-            tempTargetToEnact.isUploadedToNS = false
+            guard let enacted = try await tempTargetStorage.enactTempTarget(pk: pk) else { return }
             isTempTargetEnabled = true
-            if viewContext.hasChanges {
-                try viewContext.save()
-            }
 
             updateLatestTempTargetConfiguration()
 
             let tempTarget = TempTarget(
-                name: tempTargetToEnact.name,
+                name: enacted.name,
                 createdAt: Date(),
-                targetTop: tempTargetToEnact.target?.decimalValue,
-                targetBottom: tempTargetToEnact.target?.decimalValue,
-                duration: tempTargetToEnact.duration?.decimalValue ?? 0,
+                targetTop: enacted.target,
+                targetBottom: enacted.target,
+                duration: enacted.duration ?? 0,
                 enteredBy: TempTarget.local,
                 reason: TempTarget.custom,
                 isPreset: true,
@@ -293,54 +249,22 @@ extension Adjustments.StateModel {
         }
     }
 
-    /// Disables all active Temp Targets.
+    /// Disables all active Temp Targets (optionally except `pk`), optionally logging a run entry.
+    /// The "disable + log a run" composite lives in `TempTargetsStorage`; this wrapper mirrors the
+    /// cancel into the JSON `FileStorage` (only when something was actually disabled).
     @MainActor func disableAllActiveTempTargets(
-        except id: NSManagedObjectID? = nil,
+        except pk: Int64? = nil,
         createTempTargetRunEntry: Bool
     ) async {
         do {
-            // Get ALL NSManagedObject IDs of ALL active Temp Targets to cancel every single Temp Target
-            let ids = try await tempTargetStorage.loadLatestTempTargetConfigurations(fetchLimit: 0) // 0 = no fetch limit
-
-            try await viewContext.perform {
-                // Fetch the existing TempTargetStored objects from the context
-                let results = try ids.compactMap { id in
-                    try self.viewContext.existingObject(with: id) as? TempTargetStored
-                }
-
-                // If there are no results, return early
-                guard !results.isEmpty else { return }
-
-                // Check if we also need to create a corresponding TempTargetRunStored entry
-                if createTempTargetRunEntry {
-                    // Use the first temp target to create a new TempTargetRunStored entry
-                    if let canceledTempTarget = results.first {
-                        let newTempTargetRunStored = TempTargetRunStored(context: self.viewContext)
-                        newTempTargetRunStored.id = UUID()
-                        newTempTargetRunStored.name = canceledTempTarget.name
-                        newTempTargetRunStored.startDate = canceledTempTarget.date ?? .distantPast
-                        newTempTargetRunStored.endDate = Date()
-                        newTempTargetRunStored.target = canceledTempTarget.target ?? 0
-                        newTempTargetRunStored.tempTarget = canceledTempTarget
-                        newTempTargetRunStored.isUploadedToNS = false
-                    }
-                }
-
-                // Disable all temporary targets except the one with given id
-                for tempTargetToCancel in results {
-                    if tempTargetToCancel.objectID != id {
-                        tempTargetToCancel.enabled = false
-                    }
-                }
-
-                // Save the context if there are changes
-                if self.viewContext.hasChanges {
-                    try self.viewContext.save()
-
-                    // Update the storage
-                    self.tempTargetStorage.saveTempTargetsToStorage([TempTarget.cancel(at: Date().addingTimeInterval(-1))])
-                }
+            let didDisable = try await tempTargetStorage.disableAllActiveTempTargets(
+                except: pk,
+                createRunEntry: createTempTargetRunEntry
+            )
+            if didDisable {
+                tempTargetStorage.saveTempTargetsToStorage([TempTarget.cancel(at: Date().addingTimeInterval(-1))])
             }
+            updateLatestTempTargetConfiguration()
         } catch {
             debug(
                 .default,
@@ -349,42 +273,39 @@ extension Adjustments.StateModel {
         }
     }
 
-    /// Duplicates the current preset and cancels the previous one.
+    /// Duplicates the active Temp Target Preset and cancels the previous one.
     @MainActor func duplicateTempTargetPresetAndCancelPreviousTempTarget() async {
         // We get the current active Preset by using currentActiveTempTarget which can either be a Preset or a custom TempTarget
         guard let tempTargetPresetToDuplicate = currentActiveTempTarget,
               tempTargetPresetToDuplicate.isPreset == true else { return }
 
-        // Copy the current TempTarget-Preset to not edit the underlying Preset
-        let duplidateId = await tempTargetStorage.copyRunningTempTarget(tempTargetPresetToDuplicate)
-
-        // Cancel the duplicated Temp Target
-        // As we are on the Main Thread already we don't need to cancel via the objectID in this case
         do {
-            try await viewContext.perform {
-                tempTargetPresetToDuplicate.enabled = false
+            // Copy the running preset into a fresh non-preset temp target (so editing doesn't mutate
+            // the preset), then disable everything else — the copy becomes the running temp target.
+            let duplicate = try await tempTargetStorage.copyRunningTempTarget(tempTargetPresetToDuplicate)
+            try await tempTargetStorage.disableAllActiveTempTargets(except: duplicate.pk, createRunEntry: false)
 
-                guard self.viewContext.hasChanges else { return }
-                try self.viewContext.save()
-            }
-
-            if let tempTargetToEdit = try viewContext.existingObject(with: duplidateId) as? TempTargetStored
-            {
-                currentActiveTempTarget = tempTargetToEdit
-                activeTempTargetName = tempTargetToEdit.name ?? String(localized: "Custom Temp Target")
-            }
+            currentActiveTempTarget = duplicate
+            activeTempTargetName = duplicate.name ?? String(localized: "Custom Temp Target")
         } catch {
             debugPrint(
-                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to cancel previous override with error: \(error)"
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to cancel previous temp target with error: \(error)"
             )
         }
     }
 
-    /// Deletes a Temp Target preset.
-    func invokeTempTargetPresetDeletion(_ objectID: NSManagedObjectID) async {
-        await tempTargetStorage.deleteTempTargetPreset(objectID)
-        setupTempTargetPresetsArray()
-        setupScheduledTempTargetsArray()
+    /// Deletes a Temp Target preset (by GRDB rowid).
+    func invokeTempTargetPresetDeletion(_ pk: Int64) async {
+        do {
+            try await tempTargetStorage.deleteTempTargetPreset(pk: pk)
+            setupTempTargetPresetsArray()
+            setupScheduledTempTargetsArray()
+        } catch {
+            debug(
+                .default,
+                "\(DebuggingIdentifiers.failed) Failed to delete temp target preset: \(error)"
+            )
+        }
     }
 
     /// Resets Temp Target state variables.

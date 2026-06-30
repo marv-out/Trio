@@ -47,12 +47,16 @@ extension BaseNightscoutManager {
             .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
                 self?.requestUpload(.overrides)
             })
-        tempTargetUploadControllerDelegate.onContentChange = { [weak self] in
-            self?.requestUpload(.tempTargets)
-        }
-        tempTargetRunUploadControllerDelegate.onContentChange = { [weak self] in
-            self?.requestUpload(.tempTargets)
-        }
+        // Temp targets + runs live in GRDB: a ValueObservation fires when the not-yet-uploaded set
+        // changes, replacing the former NSFetchedResultsControllers.
+        tempTargetUploadObservationCancellable = TempTargetStore.observeNotYetUploadedCount()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                self?.requestUpload(.tempTargets)
+            })
+        tempTargetRunUploadObservationCancellable = TempTargetRunStore.observeNotYetUploadedCount()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                self?.requestUpload(.tempTargets)
+            })
         pumpEventUploadControllerDelegate.onContentChange = { [weak self] in
             self?.requestUpload(.pumpHistory)
         }
@@ -67,8 +71,6 @@ extension BaseNightscoutManager {
         Task { @MainActor in
             do {
                 try self.determinationUploadController.performFetch()
-                try self.tempTargetUploadController.performFetch()
-                try self.tempTargetRunUploadController.performFetch()
                 try self.pumpEventUploadController.performFetch()
                 try self.carbEntryUploadController.performFetch()
                 try self.glucoseUploadController.performFetch()

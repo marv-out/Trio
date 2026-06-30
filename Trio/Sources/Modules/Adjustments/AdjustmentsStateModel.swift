@@ -46,7 +46,7 @@ extension Adjustments {
         var currentActiveOverride: OverrideRecord?
         var activeTempTargetName: String = ""
 
-        var currentActiveTempTarget: TempTargetStored?
+        var currentActiveTempTarget: TempTargetRecord?
         var showOverrideEditSheet = false
         var showTempTargetEditSheet = false
         var units: GlucoseUnits = .mgdL
@@ -58,8 +58,8 @@ extension Adjustments {
         var isTempTargetEnabled: Bool = false
         var date = Date()
         var newPresetName = ""
-        var tempTargetPresets: [TempTargetStored] = []
-        var scheduledTempTargets: [TempTargetStored] = []
+        var tempTargetPresets: [TempTargetRecord] = []
+        var scheduledTempTargets: [TempTargetRecord] = []
         var percentage: Double = 100
         var autosensMax: Decimal = 1.2
         var halfBasalTarget: Decimal = 160
@@ -79,9 +79,12 @@ extension Adjustments {
         // Combine
         private var cancellables = Set<AnyCancellable>()
 
-        // Override presets now live in GRDB; observed via ValueObservation so the list stays
-        // current after edits/inserts/deletes/reorders (the former one-shot fetch did not).
+        // Override + temp target presets and scheduled temp targets now live in GRDB; observed via
+        // ValueObservation so the lists stay current after edits/inserts/deletes/reorders (the
+        // former one-shot fetch did not).
         @ObservationIgnored var overridePresetsObservationCancellable: AnyCancellable?
+        @ObservationIgnored var tempTargetPresetsObservationCancellable: AnyCancellable?
+        @ObservationIgnored var scheduledTempTargetsObservationCancellable: AnyCancellable?
 
         // MARK: - Lifecycle
 
@@ -194,15 +197,14 @@ extension Adjustments {
         /// Reorders Temp Target Presets and updates the view.
         func reorderTempTargets(from source: IndexSet, to destination: Int) {
             tempTargetPresets.move(fromOffsets: source, toOffset: destination)
-            for (index, tempTarget) in tempTargetPresets.enumerated() {
-                tempTarget.orderPosition = Int16(index + 1)
-            }
-            do {
-                guard viewContext.hasChanges else { return }
-                try viewContext.save()
-                setupTempTargetPresetsArray()
-            } catch {
-                debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save Temp Target Presets order")
+            let reordered = tempTargetPresets
+            Task {
+                do {
+                    try await tempTargetStorage.reorderPresets(reordered)
+                    setupTempTargetPresetsArray()
+                } catch {
+                    debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save Temp Target Presets order")
+                }
             }
         }
     }

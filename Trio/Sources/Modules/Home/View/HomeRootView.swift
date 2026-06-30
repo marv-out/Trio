@@ -45,11 +45,13 @@ extension Home {
         // Overrides now live in GRDB; `state.overrides` is kept current via ValueObservation
         // (see OverrideSetup) and is sorted newest-first like the former @FetchRequest.
 
-        @FetchRequest(fetchRequest: TempTargetStored.fetch(
-            NSPredicate.lastActiveTempTarget,
-            ascending: false,
-            fetchLimit: 1
-        )) var latestTempTarget: FetchedResults<TempTargetStored>
+        // Temp targets now live in GRDB; `state.tempTargetStored` is kept current via ValueObservation
+        // (see TempTargetSetup) but also includes *future-scheduled* rows. The active one (the former
+        // narrower `lastActiveTempTarget` @FetchRequest) is derived here: enabled and already started.
+        private var activeTempTarget: TempTargetRecord? {
+            let now = Date()
+            return state.tempTargetStored.first { $0.enabled && ($0.date ?? .distantPast) <= now }
+        }
 
         var bolusProgressFormatter: NumberFormatter {
             let fractionDigits: Int = switch state.settingsManager.preferences.bolusIncrement {
@@ -295,11 +297,11 @@ extension Home {
         }
 
         var tempTargetString: String? {
-            guard let latestTempTarget = latestTempTarget.first else {
+            guard let latestTempTarget = activeTempTarget else {
                 return nil
             }
             let duration = latestTempTarget.duration
-            let addedMinutes = Int(truncating: duration ?? 0)
+            let addedMinutes = Int(truncating: NSDecimalNumber(decimal: duration ?? 0))
             let date = latestTempTarget.date ?? Date()
             let newDuration = max(
                 Decimal(Date().distance(to: date.addingTimeInterval(addedMinutes.minutes.timeInterval)).minutes),
@@ -310,7 +312,7 @@ extension Home {
             var target = (latestTempTarget.target ?? 100) as Decimal
             // Use TempTargetCalculations to get effective HBT (handles both custom and auto-adjusted standard TT)
             let effectiveHBT = TempTargetCalculations.computeEffectiveHBT(
-                tempTargetHalfBasalTarget: latestTempTarget.halfBasalTarget?.decimalValue,
+                tempTargetHalfBasalTarget: latestTempTarget.halfBasalTarget,
                 settingHalfBasalTarget: state.settingHalfBasalTarget,
                 target: target,
                 autosensMax: state.autosensMax
@@ -335,8 +337,8 @@ extension Home {
             } else {
                 /// Do not show the Temp Target anymore
                 Task {
-                    guard let objectID = self.latestTempTarget.first?.objectID else { return }
-                    await state.cancelTempTarget(withID: objectID)
+                    guard let pk = self.activeTempTarget?.pk else { return }
+                    await state.cancelTempTarget(withPk: pk)
                 }
             }
 
@@ -589,7 +591,7 @@ extension Home {
                     .font(.title2)
                     .foregroundStyle(Color.loopGreen)
                 VStack(alignment: .leading) {
-                    Text(latestTempTarget.first?.name ?? String(localized: "Temp Target"))
+                    Text(activeTempTarget?.name ?? String(localized: "Temp Target"))
                         .font(.subheadline)
                     Text(tempTargetString)
                         .font(.caption)
@@ -612,21 +614,21 @@ extension Home {
             Image(systemName: "xmark.app")
                 .font(.title)
                 .confirmationDialog(
-                    "Stop the Temp Target \"\(latestTempTarget.first?.name ?? "")\"?",
+                    "Stop the Temp Target \"\(activeTempTarget?.name ?? "")\"?",
                     isPresented: $isConfirmStopTempTargetShown,
                     titleVisibility: .visible
                 ) {
                     Button("Stop", role: .destructive) {
                         Task {
-                            guard let objectID = latestTempTarget.first?.objectID else { return }
-                            await state.cancelTempTarget(withID: objectID)
+                            guard let pk = activeTempTarget?.pk else { return }
+                            await state.cancelTempTarget(withPk: pk)
                         }
                     }
                     Button("Cancel", role: .cancel) {}
                 }
                 .padding(.trailing, 8)
                 .onTapGesture {
-                    if !latestTempTarget.isEmpty {
+                    if activeTempTarget != nil {
                         isConfirmStopTempTargetShown = true
                     }
                 }
@@ -720,11 +722,11 @@ extension Home {
                             Spacer()
 
                             adjustmentsCancelView({
-                                if !latestTempTarget.isEmpty, !state.overrides.isEmpty {
+                                if activeTempTarget != nil, !state.overrides.isEmpty {
                                     showCancelConfirmDialog = true
                                 } else if !state.overrides.isEmpty {
                                     showCancelAlert = true
-                                } else if !latestTempTarget.isEmpty {
+                                } else if activeTempTarget != nil {
                                     showCancelAlert = true
                                 }
                             })
@@ -753,8 +755,8 @@ extension Home {
                         }
                         Button("Stop Temp Target", role: .destructive) {
                             Task {
-                                guard let objectID = latestTempTarget.first?.objectID else { return }
-                                await state.cancelTempTarget(withID: objectID)
+                                guard let pk = activeTempTarget?.pk else { return }
+                                await state.cancelTempTarget(withPk: pk)
                             }
                         }
                         Button("Stop All Adjustments", role: .destructive) {
@@ -762,8 +764,8 @@ extension Home {
                                 guard let overridePk = state.overrides.first?.pk else { return }
                                 await state.cancelOverride(withPk: overridePk)
 
-                                guard let tempTargetObjectID = latestTempTarget.first?.objectID else { return }
-                                await state.cancelTempTarget(withID: tempTargetObjectID)
+                                guard let tempTargetPk = activeTempTarget?.pk else { return }
+                                await state.cancelTempTarget(withPk: tempTargetPk)
                             }
                         }
                     } message: {

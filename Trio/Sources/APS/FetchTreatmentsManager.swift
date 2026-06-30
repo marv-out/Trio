@@ -49,7 +49,7 @@ final class BaseFetchTreatmentsManager: FetchTreatmentsManager, Injectable {
                             // Iterate and store each temp target
                             for (index, tempTarget) in sortedTargets.enumerated() {
                                 // Skip saving if a Temp Target with the same date already exists or it's a cancel target
-                                guard await !self.tempTargetsStorage.existsTempTarget(with: tempTarget.createdAt),
+                                guard try await !self.tempTargetsStorage.existsTempTarget(with: tempTarget.createdAt),
                                       tempTarget.reason != TempTarget.cancel
                                 else {
                                     debug(

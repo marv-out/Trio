@@ -131,8 +131,7 @@ extension MainChartView {
                 TempTargetView(
                     tempTargetStored: state.tempTargetStored,
                     tempTargetRunStored: state.tempTargetRunStored,
-                    units: state.units,
-                    viewContext: context
+                    units: state.units
                 )
 
                 GlucoseChartView(

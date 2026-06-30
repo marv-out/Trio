@@ -167,43 +167,10 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     var overrideUploadObservationCancellable: AnyCancellable?
     var overrideRunUploadObservationCancellable: AnyCancellable?
 
-    let tempTargetUploadControllerDelegate = FetchedResultsControllerDelegate()
-    lazy var tempTargetUploadController: NSFetchedResultsController<TempTargetStored> = {
-        let request = NSFetchRequest<TempTargetStored>(entityName: "TempTargetStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \TempTargetStored.date, ascending: true)]
-        request.predicate = NSPredicate(
-            format: "date >= %@ AND isUploadedToNS == %@",
-            Date.oneDayAgo as NSDate,
-            false as NSNumber
-        )
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = tempTargetUploadControllerDelegate
-        return controller
-    }()
-
-    let tempTargetRunUploadControllerDelegate = FetchedResultsControllerDelegate()
-    lazy var tempTargetRunUploadController: NSFetchedResultsController<TempTargetRunStored> = {
-        let request = NSFetchRequest<TempTargetRunStored>(entityName: "TempTargetRunStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \TempTargetRunStored.startDate, ascending: true)]
-        request.predicate = NSPredicate(
-            format: "startDate >= %@ AND isUploadedToNS == %@",
-            Date.oneDayAgo as NSDate,
-            false as NSNumber
-        )
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = tempTargetRunUploadControllerDelegate
-        return controller
-    }()
+    // Temp targets + their runs now live in GRDB; the "not yet uploaded" trigger is a ValueObservation
+    // (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
+    var tempTargetUploadObservationCancellable: AnyCancellable?
+    var tempTargetRunUploadObservationCancellable: AnyCancellable?
 
     let pumpEventUploadControllerDelegate = FetchedResultsControllerDelegate()
     lazy var pumpEventUploadController: NSFetchedResultsController<PumpEventStored> = {
@@ -1172,26 +1139,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     }
 
     private func updateTempTargetsAsUploaded(_ tempTargets: [NightscoutTreatment]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateTempTargetsAsUploaded"
-        await context.perform {
-            let ids = tempTargets.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<TempTargetStored> = TempTargetStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToNS = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS for TempTargetStored: \(error.userInfo)"
-                )
-            }
+        do {
+            let ids = tempTargets.compactMap { $0.id.flatMap(UUID.init(uuidString:)) }
+            try await TempTargetStore.markUploaded(ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS for TempTargetStored: \(error)"
+            )
         }
     }
 
@@ -1215,26 +1169,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     }
 
     private func updateTempTargetRunsAsUploaded(_ tempTargetRuns: [NightscoutTreatment]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateTempTargetRunsAsUploaded"
-        await context.perform {
-            let ids = tempTargetRuns.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<TempTargetRunStored> = TempTargetRunStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToNS = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS for TempTargetRunStored: \(error.userInfo)"
-                )
-            }
+        do {
+            let ids = tempTargetRuns.compactMap { $0.id.flatMap(UUID.init(uuidString:)) }
+            try await TempTargetRunStore.markUploaded(ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS for TempTargetRunStored: \(error)"
+            )
         }
     }
 

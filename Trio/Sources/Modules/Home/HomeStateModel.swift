@@ -99,8 +99,8 @@ extension Home {
         var lastPumpBolus: PumpEventStored?
         var overrides: [OverrideRecord] = []
         var overrideRunStored: [OverrideRunRecord] = []
-        var tempTargetStored: [TempTargetStored] = []
-        var tempTargetRunStored: [TempTargetRunStored] = []
+        var tempTargetStored: [TempTargetRecord] = []
+        var tempTargetRunStored: [TempTargetRunRecord] = []
         var isOverrideCancelled: Bool = false
         var preprocessedData: [(id: UUID, forecast: Forecast, forecastValue: ForecastValue)] = []
         var pumpStatusHighlightMessage: String?
@@ -256,35 +256,10 @@ extension Home {
         @ObservationIgnored var overrideObservationCancellable: AnyCancellable?
         @ObservationIgnored var overrideRunObservationCancellable: AnyCancellable?
 
-        @ObservationIgnored let tempTargetControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var tempTargetController: NSFetchedResultsController<TempTargetStored> = {
-            let request = NSFetchRequest<TempTargetStored>(entityName: "TempTargetStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \TempTargetStored.date, ascending: false)]
-            request.predicate = NSPredicate.tempTargetsForMainChart
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = tempTargetControllerDelegate
-            return controller
-        }()
-
-        @ObservationIgnored let tempTargetRunControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var tempTargetRunController: NSFetchedResultsController<TempTargetRunStored> = {
-            let request = NSFetchRequest<TempTargetRunStored>(entityName: "TempTargetRunStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \TempTargetRunStored.startDate, ascending: false)]
-            request.predicate = NSPredicate(format: "startDate >= %@", Date.oneDayAgo as NSDate)
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = tempTargetRunControllerDelegate
-            return controller
-        }()
+        // Temp targets + their runs now live in GRDB; the lists are kept current via ValueObservation
+        // instead of Core Data NSFetchedResultsControllers. See TempTargetSetup.
+        @ObservationIgnored var tempTargetObservationCancellable: AnyCancellable?
+        @ObservationIgnored var tempTargetRunObservationCancellable: AnyCancellable?
 
         // Battery now lives in GRDB; the current value is observed via ValueObservation
         // instead of a Core Data NSFetchedResultsController. See BatterySetup.

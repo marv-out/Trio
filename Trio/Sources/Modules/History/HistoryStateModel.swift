@@ -28,16 +28,19 @@ extension History {
         var carbEntryToEdit: CarbEntryStored?
         var showCarbEntryEditor = false
 
-        // Override runs now live in GRDB; observed via ValueObservation instead of a SwiftUI
-        // @FetchRequest. The "startDate >= oneDayAgo" rule is applied in the sink.
+        // Override + temp target runs now live in GRDB; observed via ValueObservation instead of a
+        // SwiftUI @FetchRequest. The "startDate >= oneDayAgo" rule is applied in the sink.
         var overrideRunStored: [OverrideRunRecord] = []
         @ObservationIgnored private var overrideRunObservationCancellable: AnyCancellable?
+        var tempTargetRunStored: [TempTargetRunRecord] = []
+        @ObservationIgnored private var tempTargetRunObservationCancellable: AnyCancellable?
 
         override func subscribe() {
             units = settingsManager.settings.units
             broadcaster.register(DeterminationObserver.self, observer: self)
             broadcaster.register(SettingsObserver.self, observer: self)
             setupOverrideRunObservation()
+            setupTempTargetRunObservation()
         }
 
         private func setupOverrideRunObservation() {
@@ -53,6 +56,23 @@ extension History {
                         guard let self else { return }
                         let cutoff = Date.oneDayAgo
                         overrideRunStored = records.filter { ($0.startDate ?? .distantPast) >= cutoff }
+                    }
+                )
+        }
+
+        private func setupTempTargetRunObservation() {
+            tempTargetRunObservationCancellable = TempTargetRunStore.observeRecent()
+                .receive(on: DispatchQueue.main)
+                .sink(
+                    receiveCompletion: { completion in
+                        if case let .failure(error) = completion {
+                            debug(.default, "\(DebuggingIdentifiers.failed) History temp target run observation failed: \(error)")
+                        }
+                    },
+                    receiveValue: { [weak self] records in
+                        guard let self else { return }
+                        let cutoff = Date.oneDayAgo
+                        tempTargetRunStored = records.filter { ($0.startDate ?? .distantPast) >= cutoff }
                     }
                 )
         }

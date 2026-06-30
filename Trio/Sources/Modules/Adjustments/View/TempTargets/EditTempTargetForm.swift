@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 struct EditTempTargetForm: View {
-    @ObservedObject var tempTarget: TempTargetStored
+    var tempTarget: TempTargetRecord
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.colorScheme) var colorScheme
     @Environment(AppState.self) var appState
@@ -26,21 +26,21 @@ struct EditTempTargetForm: View {
     @State private var isPreset = false
     @State private var isEnabled = false
 
-    init(tempTargetToEdit: TempTargetStored, state: Adjustments.StateModel) {
+    init(tempTargetToEdit: TempTargetRecord, state: Adjustments.StateModel) {
         tempTarget = tempTargetToEdit
         _state = StateObject(wrappedValue: state)
         _name = State(initialValue: tempTargetToEdit.name ?? "")
-        _target = State(initialValue: tempTargetToEdit.target?.decimalValue ?? 0)
-        _duration = State(initialValue: tempTargetToEdit.duration?.decimalValue ?? 0)
+        _target = State(initialValue: tempTargetToEdit.target ?? 0)
+        _duration = State(initialValue: tempTargetToEdit.duration ?? 0)
         _date = State(initialValue: tempTargetToEdit.date ?? Date())
-        _halfBasalTarget = State(initialValue: tempTargetToEdit.halfBasalTarget?.decimalValue ?? state.settingHalfBasalTarget)
+        _halfBasalTarget = State(initialValue: tempTargetToEdit.halfBasalTarget ?? state.settingHalfBasalTarget)
         _isPreset = State(initialValue: tempTargetToEdit.isPreset)
         _isEnabled = State(initialValue: tempTargetToEdit.enabled)
 
-        let tempTargetHalfBasal: Decimal = (tempTargetToEdit.halfBasalTarget?.decimalValue) ?? state.settingHalfBasalTarget
+        let tempTargetHalfBasal: Decimal = tempTargetToEdit.halfBasalTarget ?? state.settingHalfBasalTarget
 
         let H = tempTargetHalfBasal
-        let T = tempTargetToEdit.target?.decimalValue ?? 100
+        let T = tempTargetToEdit.target ?? 100
         let calcPercentage = TempTargetCalculations.computeAdjustedPercentage(
             halfBasalTarget: H,
             target: T,
@@ -327,22 +327,19 @@ struct EditTempTargetForm: View {
         HStack {
             Spacer()
             Button(action: {
-                saveChanges()
+                let updatedTempTarget = makeUpdatedTempTarget()
                 debug(
                     .default,
                     "TempTarget: target=\(target), HBT=\(state.settingHalfBasalTarget), effectiveHBT=\(String(describing: halfBasalTarget)), percentage=\(Int(percentage))%, adjustmentType=\(tempTargetSensitivityAdjustmentType.rawValue)"
                 )
-                do {
-                    guard let moc = tempTarget.managedObjectContext else { return }
-                    guard moc.hasChanges else { return }
-                    try moc.save()
+                Task {
+                    do {
+                        try await TempTargetStore.update(updatedTempTarget)
 
-                    if let currentActiveTempTarget = state.currentActiveTempTarget {
-                        Task {
-                            // TODO: - Creating a Run entry is probably needed for Overrides as well and the reason for "jumping" Overrides?
+                        if let currentActiveTempTarget = state.currentActiveTempTarget {
                             // Disable previous active Temp Targets
                             await state.disableAllActiveTempTargets(
-                                except: currentActiveTempTarget.objectID,
+                                except: currentActiveTempTarget.pk,
                                 createTempTargetRunEntry: false
                             )
 
@@ -368,11 +365,14 @@ struct EditTempTargetForm: View {
                             // Update view
                             state.updateLatestTempTargetConfiguration()
                         }
+
+                        await MainActor.run {
+                            hasChanges = false
+                            presentationMode.wrappedValue.dismiss()
+                        }
+                    } catch {
+                        debugPrint("Failed to Edit Temp Target")
                     }
-                    hasChanges = false
-                    presentationMode.wrappedValue.dismiss()
-                } catch {
-                    debugPrint("Failed to Edit Temp Target")
                 }
             }, label: {
                 Text("Save")
@@ -385,17 +385,17 @@ struct EditTempTargetForm: View {
         }.listRowBackground(hasChanges ? Color(.systemBlue) : Color(.systemGray4))
     }
 
-    private func saveChanges() {
-        tempTarget.name = name
-        tempTarget.target = NSDecimalNumber(decimal: target)
-        tempTarget.duration = NSDecimalNumber(decimal: duration)
-        tempTarget.date = date
-        tempTarget.isUploadedToNS = false
-        if let halfBasalValue = halfBasalTarget {
-            tempTarget.halfBasalTarget = NSDecimalNumber(decimal: halfBasalValue)
-        } else {
-            tempTarget.halfBasalTarget = nil
-        }
+    /// Builds the updated temp-target record from the form's edited state. The original `tempTarget`
+    /// value type is left untouched; the result is persisted via `TempTargetStore.update`.
+    private func makeUpdatedTempTarget() -> TempTargetRecord {
+        var updated = tempTarget
+        updated.name = name
+        updated.target = target
+        updated.duration = duration
+        updated.date = date
+        updated.isUploadedToNS = false
+        updated.halfBasalTarget = halfBasalTarget
+        return updated
     }
 
     private func toggleScrollWheel(_ toggle: Bool) -> Bool {
@@ -406,8 +406,8 @@ struct EditTempTargetForm: View {
 
     private func resetValues() {
         name = tempTarget.name ?? ""
-        target = tempTarget.target?.decimalValue ?? 0
-        duration = tempTarget.duration?.decimalValue ?? 0
+        target = tempTarget.target ?? 0
+        duration = tempTarget.duration ?? 0
         date = tempTarget.date ?? Date()
     }
 

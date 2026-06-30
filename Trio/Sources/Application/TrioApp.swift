@@ -474,6 +474,9 @@ extension Notification.Name {
         // `isPresetKey: "isPreset"`); runs older than 3 days are pruned.
         async let overrideDeletion: () = OverrideStore.deleteOlderThan(days: 3)
         async let overrideRunDeletion: () = OverrideRunStore.deleteOlderThan(days: 3)
+        // Temp targets + their runs likewise live in GRDB; presets are preserved.
+        async let tempTargetDeletion: () = TempTargetStore.deleteOlderThan(days: 3)
+        async let tempTargetRunDeletion: () = TempTargetRunStore.deleteOlderThan(days: 3)
 
         // Await each task to ensure they are all completed
         try await glucoseDeletion
@@ -488,6 +491,8 @@ extension Notification.Name {
         try await forecastValueDeletion
         try await overrideDeletion
         try await overrideRunDeletion
+        try await tempTargetDeletion
+        try await tempTargetRunDeletion
     }
 
     private func handleURL(_ url: URL) {

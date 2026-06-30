@@ -965,73 +965,63 @@ extension SettingsExport {
                 let category = String(localized: "Temp Target Presets")
                 debug(.default, "🔄 EXPORT: Fetching temp target presets...")
 
-                let tempTargetPresetIDs = (try? await tempTargetsStorage.fetchForTempTargetPresets()) ?? []
-                debug(.default, "🔄 EXPORT: Found \(tempTargetPresetIDs.count) temp target preset IDs")
+                do {
+                    // Temp target presets are GRDB value types — iterate directly, no Core Data unpack.
+                    let presets = try await tempTargetsStorage.fetchForTempTargetPresets()
+                    debug(.default, "🔄 EXPORT: Found \(presets.count) temp target presets")
 
-                if !tempTargetPresetIDs.isEmpty {
-                    do {
-                        let tempTargetPresets: [ExportSetting] = try await viewContext.perform {
-                            let fetchedTempTargetPresets: [TempTargetStored] = try tempTargetPresetIDs.map {
-                                guard let obj = try self.viewContext.existingObject(with: $0) as? TempTargetStored else {
-                                    throw ExportError.unknown("TempTargetStored type mismatch for objectID \($0)")
-                                }
-                                return obj
+                    if !presets.isEmpty {
+                        var processedTempTargetPresets: [ExportSetting] = []
+                        processedTempTargetPresets.reserveCapacity(presets.count * 10)
+
+                        for preset in presets {
+                            let presetName = preset.name ?? "Unknown Temp Target"
+
+                            if let target = preset.target {
+                                let targetValue = trioSettings.units == .mgdL
+                                    ? target.description
+                                    : target.formattedAsMmolL
+
+                                processedTempTargetPresets.append(.init(
+                                    category: category,
+                                    subcategory: presetName,
+                                    name: "Target",
+                                    value: targetValue,
+                                    unit: trioSettings.units.rawValue
+                                ))
                             }
 
-                            var processedTempTargetPresets: [ExportSetting] = []
-                            processedTempTargetPresets.reserveCapacity(fetchedTempTargetPresets.count * 10)
-
-                            for preset in fetchedTempTargetPresets {
-                                let presetName = preset.name ?? "Unknown Temp Target"
-
-                                if let target = preset.target {
-                                    let targetValue = trioSettings.units == .mgdL
-                                        ? target.description
-                                        : target.decimalValue.formattedAsMmolL
-
-                                    processedTempTargetPresets.append(.init(
-                                        category: category,
-                                        subcategory: presetName,
-                                        name: "Target",
-                                        value: targetValue,
-                                        unit: trioSettings.units.rawValue
-                                    ))
-                                }
-
-                                if let duration = preset.duration {
-                                    processedTempTargetPresets.append(.init(
-                                        category: category,
-                                        subcategory: presetName,
-                                        name: "Duration",
-                                        value: String(describing: duration),
-                                        unit: String(localized: "minutes")
-                                    ))
-                                }
-
-                                if let halfBasalTarget = preset.halfBasalTarget {
-                                    let halfBasalValue = trioSettings.units == .mgdL
-                                        ? halfBasalTarget.description
-                                        : halfBasalTarget.decimalValue.formattedAsMmolL
-
-                                    processedTempTargetPresets.append(.init(
-                                        category: category,
-                                        subcategory: presetName,
-                                        name: "Half Basal Target",
-                                        value: halfBasalValue,
-                                        unit: trioSettings.units.rawValue
-                                    ))
-                                }
+                            if let duration = preset.duration {
+                                processedTempTargetPresets.append(.init(
+                                    category: category,
+                                    subcategory: presetName,
+                                    name: "Duration",
+                                    value: String(describing: duration),
+                                    unit: String(localized: "minutes")
+                                ))
                             }
 
-                            return processedTempTargetPresets
+                            if let halfBasalTarget = preset.halfBasalTarget {
+                                let halfBasalValue = trioSettings.units == .mgdL
+                                    ? halfBasalTarget.description
+                                    : halfBasalTarget.formattedAsMmolL
+
+                                processedTempTargetPresets.append(.init(
+                                    category: category,
+                                    subcategory: presetName,
+                                    name: "Half Basal Target",
+                                    value: halfBasalValue,
+                                    unit: trioSettings.units.rawValue
+                                ))
+                            }
                         }
 
-                        exportSettings.append(contentsOf: tempTargetPresets)
-                        debug(.default, "✅ EXPORT: Added \(tempTargetPresets.count) temp target preset rows")
-                    } catch {
-                        // STRICT: surface the real issue
-                        return .failure(.unknown("Failed to extract Temp Targets: \(error.localizedDescription)"))
+                        exportSettings.append(contentsOf: processedTempTargetPresets)
+                        debug(.default, "✅ EXPORT: Added \(processedTempTargetPresets.count) temp target preset rows")
                     }
+                } catch {
+                    // STRICT: surface the real issue
+                    return .failure(.unknown("Failed to extract Temp Targets: \(error.localizedDescription)"))
                 }
             }
 

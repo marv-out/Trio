@@ -669,40 +669,37 @@ final class OpenAPS {
         let defaultHalfBasalTarget = preferences.halfBasalExerciseTarget
         var adjustedPreferences = preferences
 
-        // Check for active Temp Targets and adjust HBT if necessary
-        let context = newContext("createProfiles")
-        try await context.perform {
-            // Check if a Temp Target is active and check HBT differs from setting and adjust
-            if let activeTempTarget = try self.fetchActiveTempTargets(on: context).first,
-               activeTempTarget.enabled,
-               let targetValue = activeTempTarget.target?.decimalValue
-            {
-                // Compute effective HBT - handles both custom HBT and standard TT (where HBT might need adjustment)
-                let effectiveHBT = TempTargetCalculations.computeEffectiveHBT(
-                    tempTargetHalfBasalTarget: activeTempTarget.halfBasalTarget?.decimalValue,
-                    settingHalfBasalTarget: defaultHalfBasalTarget,
+        // Check for active Temp Targets and adjust HBT if necessary (Temp Targets now live in GRDB,
+        // so this value-type fetch happens up front instead of inside a Core Data perform block).
+        if let activeTempTarget = try await TempTargetStore.fetchLatestActive(),
+           activeTempTarget.enabled,
+           let targetValue = activeTempTarget.target
+        {
+            // Compute effective HBT - handles both custom HBT and standard TT (where HBT might need adjustment)
+            let effectiveHBT = TempTargetCalculations.computeEffectiveHBT(
+                tempTargetHalfBasalTarget: activeTempTarget.halfBasalTarget,
+                settingHalfBasalTarget: defaultHalfBasalTarget,
+                target: targetValue,
+                autosensMax: preferences.autosensMax
+            )
+
+            if let effectiveHBT, effectiveHBT != defaultHalfBasalTarget {
+                adjustedPreferences.halfBasalExerciseTarget = effectiveHBT
+                let percentage = Int(TempTargetCalculations.computeAdjustedPercentage(
+                    halfBasalTarget: effectiveHBT,
                     target: targetValue,
                     autosensMax: preferences.autosensMax
+                ))
+                debug(
+                    .openAPS,
+                    "TempTarget: target=\(targetValue), HBT=\(defaultHalfBasalTarget), effectiveHBT=\(effectiveHBT), percentage=\(percentage)%, adjustmentType=Custom"
                 )
-
-                if let effectiveHBT, effectiveHBT != defaultHalfBasalTarget {
-                    adjustedPreferences.halfBasalExerciseTarget = effectiveHBT
-                    let percentage = Int(TempTargetCalculations.computeAdjustedPercentage(
-                        halfBasalTarget: effectiveHBT,
-                        target: targetValue,
-                        autosensMax: preferences.autosensMax
-                    ))
-                    debug(
-                        .openAPS,
-                        "TempTarget: target=\(targetValue), HBT=\(defaultHalfBasalTarget), effectiveHBT=\(effectiveHBT), percentage=\(percentage)%, adjustmentType=Custom"
-                    )
-                }
             }
-            // Overwrite the lowTTlowersSens if autosensMax does not support it
-            if preferences.lowTemptargetLowersSensitivity, preferences.autosensMax <= 1 {
-                adjustedPreferences.lowTemptargetLowersSensitivity = false
-                debug(.openAPS, "Setting lowTTlowersSens to false due to insufficient autosensMax: \(preferences.autosensMax)")
-            }
+        }
+        // Overwrite the lowTTlowersSens if autosensMax does not support it
+        if preferences.lowTemptargetLowersSensitivity, preferences.autosensMax <= 1 {
+            adjustedPreferences.lowTemptargetLowersSensitivity = false
+            debug(.openAPS, "Setting lowTTlowersSens to false due to insufficient autosensMax: \(preferences.autosensMax)")
         }
 
         let clock = Date()
@@ -1187,17 +1184,6 @@ final class OpenAPS {
 
 // Non-Async fetch methods for trio_custom_oref_variables
 extension OpenAPS {
-    func fetchActiveTempTargets(on context: NSManagedObjectContext) throws -> [TempTargetStored] {
-        try CoreDataStack.shared.fetchEntities(
-            ofType: TempTargetStored.self,
-            onContext: context,
-            predicate: NSPredicate.lastActiveTempTarget,
-            key: "date",
-            ascending: false,
-            fetchLimit: 1
-        ) as? [TempTargetStored] ?? []
-    }
-
     func fetchGlucose(on context: NSManagedObjectContext) throws -> [GlucoseStored] {
         let results = try CoreDataStack.shared.fetchEntities(
             ofType: GlucoseStored.self,

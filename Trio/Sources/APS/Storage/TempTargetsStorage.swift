@@ -1,4 +1,3 @@
-import CoreData
 import Foundation
 import SwiftDate
 import Swinject
@@ -7,22 +6,46 @@ protocol TempTargetsObserver {
     func tempTargetsDidUpdate(_ targets: [TempTarget])
 }
 
+/// GRDB-backed temp-target storage (see `MIGRATION.md`, Step 8).
+///
+/// Same shape as Step 7's `OverrideStorage`: the protocol now deals in `TempTargetRecord` /
+/// `TempTargetRunRecord` value types instead of `NSManagedObjectID`s, and the "disable active +
+/// log a run" composite (previously duplicated in the intents, RemoteControl, Watch and the state
+/// models) is centralized here. The JSON `FileStorage` mirror (`recent()`, `current()`,
+/// `presets()`, `saveTempTargetsToStorage`) is *not* Core Data and is unchanged — mutating call
+/// sites still write to it in addition to GRDB.
 protocol TempTargetsStorage {
     func storeTempTarget(tempTarget: TempTarget) async throws
     func saveTempTargetsToStorage(_ targets: [TempTarget])
-    func fetchForTempTargetPresets() async throws -> [NSManagedObjectID]
-    func fetchScheduledTempTargets() async throws -> [NSManagedObjectID]
-    func fetchScheduledTempTarget(for targetDate: Date) async throws -> [NSManagedObjectID]
-    func copyRunningTempTarget(_ tempTarget: TempTargetStored) async -> NSManagedObjectID
-    func deleteTempTargetPreset(_ objectID: NSManagedObjectID) async
-    func loadLatestTempTargetConfigurations(fetchLimit: Int) async throws -> [NSManagedObjectID]
+    func fetchForTempTargetPresets() async throws -> [TempTargetRecord]
+    func fetchScheduledTempTargets() async throws -> [TempTargetRecord]
+    func fetchScheduledTempTarget(for targetDate: Date) async throws -> TempTargetRecord?
+    func fetchPreset(id: UUID) async throws -> TempTargetRecord?
+    func copyRunningTempTarget(_ tempTarget: TempTargetRecord) async throws -> TempTargetRecord
+    func deleteTempTargetPreset(pk: Int64) async throws
+    func reorderPresets(_ presets: [TempTargetRecord]) async throws
+    func loadLatestTempTargetConfigurations(fetchLimit: Int) async throws -> [TempTargetRecord]
+    func fetchLatestActiveTempTarget() async throws -> TempTargetRecord?
+    /// Enables a single temp target (becomes the running one): `enabled = true`, `date = now`,
+    /// `isUploadedToNS = false`. Returns the updated record.
+    @discardableResult func enactTempTarget(pk: Int64) async throws -> TempTargetRecord?
+    /// Disables every active temp target (optionally except `pk`), optionally logging a run for the
+    /// first active one. Returns `true` if anything was disabled (so callers can mirror the JSON
+    /// `FileStorage` cancel write only when state actually changed).
+    @discardableResult func disableAllActiveTempTargets(except pk: Int64?, createRunEntry: Bool) async throws -> Bool
+    /// Disables a single temp target by `pk` and logs a run for it — but only for "real" targets
+    /// (`duration != 0 && target != 0`), matching the former Home cancel logic which skipped
+    /// Nightscout cancel entries.
+    func cancelTempTarget(pk: Int64) async throws
+    /// Inserts a `TempTargetRunStored` row for `tempTarget`, linked via `tempTargetPk`.
+    func saveTempTargetRun(for tempTarget: TempTargetRecord) async throws
     func syncDate() -> Date
     func recent() -> [TempTarget]
     func getTempTargetsNotYetUploadedToNightscout() async throws -> [NightscoutTreatment]
     func getTempTargetRunsNotYetUploadedToNightscout() async throws -> [NightscoutTreatment]
     func presets() -> [TempTarget]
     func current() -> TempTarget?
-    func existsTempTarget(with date: Date) async -> Bool
+    func existsTempTarget(with date: Date) async throws -> Bool
 }
 
 final class BaseTempTargetsStorage: TempTargetsStorage, Injectable {
@@ -31,150 +54,132 @@ final class BaseTempTargetsStorage: TempTargetsStorage, Injectable {
     @Injected() private var broadcaster: Broadcaster!
     @Injected() private var settingsManager: SettingsManager!
 
-    private let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-
-    private let makeContext: () -> NSManagedObjectContext
-
-    init(resolver: Resolver, contextProvider: (() -> NSManagedObjectContext)? = nil) {
-        makeContext = contextProvider ?? { CoreDataStack.shared.newTaskContext() }
+    init(resolver: Resolver) {
         injectServices(resolver)
     }
 
-    func loadLatestTempTargetConfigurations(fetchLimit: Int) async throws -> [NSManagedObjectID] {
-        let context = makeContext()
-        context.name = "loadLatestTempTargetConfigurations"
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TempTargetStored.self,
-            onContext: context,
-            predicate: NSPredicate.lastActiveTempTarget,
-            key: "orderPosition",
-            ascending: true,
-            fetchLimit: fetchLimit
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [TempTargetStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID)
-        }
+    /// `100 mg/dL` fallback target in the user's display unit (mirrors the former Core Data mapping).
+    private var defaultTargetInUserUnits: Decimal {
+        settingsManager.settings.units == .mgdL ? 100.0 : 100.asMmolL
     }
 
-    /// Returns the NSManagedObjectID of the Temp Target Presets
-    func fetchForTempTargetPresets() async throws -> [NSManagedObjectID] {
-        let context = makeContext()
-        context.name = "fetchForTempTargetPresets"
+    // MARK: - Fetches
 
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TempTargetStored.self,
-            onContext: context,
-            predicate: NSPredicate.allTempTargetPresets,
-            key: "orderPosition",
-            ascending: true
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [TempTargetStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID)
-        }
+    func fetchForTempTargetPresets() async throws -> [TempTargetRecord] {
+        try await TempTargetStore.fetchPresets()
     }
 
-    func fetchScheduledTempTargets() async throws -> [NSManagedObjectID] {
-        let context = makeContext()
-        context.name = "fetchScheduledTempTargets"
-
-        let scheduledTempTargets = NSPredicate(format: "date > %@", Date() as NSDate)
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TempTargetStored.self,
-            onContext: context,
-            predicate: scheduledTempTargets,
-            key: "date",
-            ascending: false
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [TempTargetStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID)
-        }
+    /// `fetchLimit <= 0` means "no limit" (the old Core Data `fetchLimit: 0` convention).
+    func loadLatestTempTargetConfigurations(fetchLimit: Int) async throws -> [TempTargetRecord] {
+        try await TempTargetStore.fetchActiveConfigurations(limit: fetchLimit > 0 ? fetchLimit : nil)
     }
 
-    func fetchScheduledTempTarget(for targetDate: Date) async throws -> [NSManagedObjectID] {
-        let context = makeContext()
-        context.name = "fetchScheduledTempTarget"
-
-        let predicate = NSPredicate(format: "date == %@", targetDate as NSDate)
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TempTargetStored.self,
-            onContext: context,
-            predicate: predicate,
-            key: "date",
-            ascending: false,
-            fetchLimit: 1
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [TempTargetStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID)
-        }
+    func fetchLatestActiveTempTarget() async throws -> TempTargetRecord? {
+        try await TempTargetStore.fetchLatestActive()
     }
+
+    func fetchScheduledTempTargets() async throws -> [TempTargetRecord] {
+        try await TempTargetStore.fetchScheduled()
+    }
+
+    func fetchScheduledTempTarget(for targetDate: Date) async throws -> TempTargetRecord? {
+        try await TempTargetStore.fetchScheduled(for: targetDate)
+    }
+
+    func fetchPreset(id: UUID) async throws -> TempTargetRecord? {
+        try await TempTargetStore.fetch(id: id)
+    }
+
+    func existsTempTarget(with date: Date) async throws -> Bool {
+        try await TempTargetStore.exists(date: date)
+    }
+
+    // MARK: - Writes
 
     func storeTempTarget(tempTarget: TempTarget) async throws {
-        let context = makeContext()
-        context.name = "storeTempTarget"
+        var record = TempTargetRecord()
+        record.id = UUID()
+        record.date = tempTarget.createdAt
+        record.enabled = tempTarget.enabled ?? false
+        record.duration = tempTarget.duration
+        record.isUploadedToNS = false
+        record.name = tempTarget.name
+        record.target = tempTarget.targetTop ?? 0
+        record.isPreset = tempTarget.isPreset ?? false
+        record.enteredBy = tempTarget.enteredBy
 
-        var presetCount = -1
-        if tempTarget.isPreset == true {
-            let presets = try await fetchForTempTargetPresets()
-            presetCount = presets.count
+        // Nullify half basal target to ensure the latest HBT is used via OpenAPS Manager when
+        // sending TT data to oref; set it only if it differs from the preference default.
+        record.halfBasalTarget = nil
+        if let halfBasalTarget = tempTarget.halfBasalTarget,
+           halfBasalTarget != settingsManager.preferences.halfBasalExerciseTarget
+        {
+            record.halfBasalTarget = halfBasalTarget
         }
 
-        try await context.perform {
-            let newTempTarget = TempTargetStored(context: context)
-            newTempTarget.date = tempTarget.createdAt
-            newTempTarget.id = UUID()
-            newTempTarget.enabled = tempTarget.enabled ?? false
-            newTempTarget.duration = tempTarget.duration as NSDecimalNumber
-            newTempTarget.isUploadedToNS = false
-            newTempTarget.name = tempTarget.name
-            newTempTarget.target = NSDecimalNumber(decimal: tempTarget.targetTop ?? 0)
-            newTempTarget.isPreset = tempTarget.isPreset ?? false
-            newTempTarget.enteredBy = tempTarget.enteredBy
+        // `orderPosition` (presets only) is assigned atomically inside the store.
+        try await TempTargetStore.store(record)
+    }
 
-            // Nullify half basal target to ensure the latest HBT is used via OpenAPS Manager when sending TT data to oref
-            newTempTarget.halfBasalTarget = nil
+    func copyRunningTempTarget(_ tempTarget: TempTargetRecord) async throws -> TempTargetRecord {
+        try await TempTargetStore.copyRunning(tempTarget)
+    }
 
-            if let halfBasalTarget = tempTarget.halfBasalTarget,
-               halfBasalTarget != self.settingsManager.preferences.halfBasalExerciseTarget
-            {
-                newTempTarget.halfBasalTarget = NSDecimalNumber(decimal: halfBasalTarget)
-            }
+    func deleteTempTargetPreset(pk: Int64) async throws {
+        try await TempTargetStore.delete(pk: pk)
+    }
 
-            if tempTarget.isPreset == true, presetCount > -1 {
-                newTempTarget.orderPosition = Int16(presetCount + 1)
-            }
+    func reorderPresets(_ presets: [TempTargetRecord]) async throws {
+        try await TempTargetStore.reorder(presets)
+    }
 
-            do {
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debug(.default, "\(DebuggingIdentifiers.failed) Failed to save new temp target with error: \(error.userInfo)")
-                throw error
-            }
+    @discardableResult func enactTempTarget(pk: Int64) async throws -> TempTargetRecord? {
+        guard var record = try await TempTargetStore.fetch(pk: pk) else { return nil }
+        record.enabled = true
+        record.date = Date()
+        record.isUploadedToNS = false
+        try await TempTargetStore.update(record)
+        return record
+    }
+
+    @discardableResult func disableAllActiveTempTargets(except pk: Int64? = nil, createRunEntry: Bool) async throws -> Bool {
+        let active = try await TempTargetStore.fetchActiveConfigurations()
+        guard !active.isEmpty else { return false }
+
+        if createRunEntry, let canceled = active.first {
+            try await saveTempTargetRun(for: canceled)
+        }
+
+        let pksToDisable = active.compactMap(\.pk).filter { $0 != pk }
+        try await TempTargetStore.disable(pks: pksToDisable)
+        return true
+    }
+
+    func cancelTempTarget(pk: Int64) async throws {
+        guard var record = try await TempTargetStore.fetch(pk: pk) else { return }
+        record.enabled = false
+        try await TempTargetStore.update(record)
+
+        // Do not log a run for Nightscout "cancel" entries (duration/target == 0).
+        if (record.duration ?? 0) != 0, (record.target ?? 0) != 0 {
+            try await saveTempTargetRun(for: record)
         }
     }
+
+    func saveTempTargetRun(for tempTarget: TempTargetRecord) async throws {
+        let run = TempTargetRunRecord(
+            id: UUID(),
+            name: tempTarget.name,
+            startDate: tempTarget.date ?? .distantPast,
+            endDate: Date(),
+            isUploadedToNS: false,
+            target: tempTarget.target ?? 0,
+            tempTargetPk: tempTarget.pk
+        )
+        try await TempTargetRunStore.saveRun(run)
+    }
+
+    // MARK: - FileStorage (JSON mirror — not Core Data, unchanged)
 
     func saveTempTargetsToStorage(_ targets: [TempTarget]) {
         processQueue.async {
@@ -193,75 +198,6 @@ final class BaseTempTargetsStorage: TempTargetsStorage, Injectable {
 
             self.broadcaster.notify(TempTargetsObserver.self, on: self.processQueue) {
                 $0.tempTargetsDidUpdate(uniqEvents)
-            }
-        }
-    }
-
-    func existsTempTarget(with date: Date) async -> Bool {
-        let context = makeContext()
-        context.name = "existsTempTarget"
-
-        return await context.perform {
-            // Fetch all Temp Targets with the given date
-            let fetchRequest: NSFetchRequest<TempTargetStored> = TempTargetStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "date == %@", date as NSDate)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                return !results.isEmpty
-            } catch let error as NSError {
-                debugPrint("\(DebuggingIdentifiers.failed) Failed to check for existing Temp Target: \(error)")
-                return false
-            }
-        }
-    }
-
-    // Copy the current Temp Target if it is a RUNNING Preset
-    /// otherwise we would edit the Preset
-    @MainActor func copyRunningTempTarget(_ tempTarget: TempTargetStored) async -> NSManagedObjectID {
-        let newTempTarget = TempTargetStored(context: viewContext)
-        newTempTarget.date = tempTarget.date
-        newTempTarget.id = tempTarget.id
-        newTempTarget.enabled = tempTarget.enabled
-        newTempTarget.duration = tempTarget.duration
-        newTempTarget.isUploadedToNS = true // to avoid getting duplicates on NS
-        newTempTarget.name = tempTarget.name
-        newTempTarget.target = tempTarget.target
-        newTempTarget.isPreset = false // no Preset
-        newTempTarget.halfBasalTarget = tempTarget.halfBasalTarget != 160 ? tempTarget.halfBasalTarget : nil
-
-        await viewContext.perform {
-            do {
-                guard self.viewContext.hasChanges else { return }
-                try self.viewContext.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to copy Temp Target with error: \(error.userInfo)"
-                )
-            }
-        }
-
-        return newTempTarget.objectID
-    }
-
-    func deleteTempTargetPreset(_ objectID: NSManagedObjectID) async {
-        let context = makeContext()
-        context.name = "deleteTempTargetPreset"
-
-        await context.perform {
-            do {
-                let result = try context.existingObject(with: objectID) as? TempTargetStored
-                guard let tempTarget = result else {
-                    debug(.default, "\(DebuggingIdentifiers.failed) Temp Target for batch delete not found.")
-                    return
-                }
-
-                context.delete(tempTarget)
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch {
-                debug(.default, "\(DebuggingIdentifiers.failed) Failed to delete Temp Target: \(error)")
             }
         }
     }
@@ -288,94 +224,65 @@ final class BaseTempTargetsStorage: TempTargetsStorage, Injectable {
         return last
     }
 
+    func presets() -> [TempTarget] {
+        storage.retrieve(OpenAPS.Trio.tempTargetsPresets, as: [TempTarget].self)?.reversed() ?? []
+    }
+
+    // MARK: - Nightscout
+
     func getTempTargetsNotYetUploadedToNightscout() async throws -> [NightscoutTreatment] {
-        let context = makeContext()
-        context.name = "getTempTargetsNotYetUploadedToNightscout"
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TempTargetStored.self,
-            onContext: context,
-            predicate: NSPredicate.lastActiveAdjustmentNotYetUploadedToNightscout,
-            key: "date",
-            ascending: false
-        )
-
-        return try await context.perform {
-            guard let fetchedTempTargets = results as? [TempTargetStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedTempTargets.map { tempTarget in
-                NightscoutTreatment(
-                    duration: Int(truncating: tempTarget.duration ?? 60),
-                    rawDuration: nil,
-                    rawRate: nil,
-                    absolute: nil,
-                    rate: nil,
-                    eventType: .nsTempTarget,
-                    createdAt: tempTarget.date ?? Date(),
-                    enteredBy: tempTarget.enteredBy ?? TempTarget.local,
-                    bolus: nil,
-                    insulin: nil,
-                    notes: tempTarget.name ?? TempTarget.custom,
-                    carbs: nil,
-                    targetTop: tempTarget
-                        .target as Decimal? ?? (self.settingsManager.settings.units == .mgdL ? 100.0 : 100.asMmolL),
-                    targetBottom: tempTarget
-                        .target as Decimal? ?? (self.settingsManager.settings.units == .mgdL ? 100.0 : 100.asMmolL)
-                )
-            }
+        let tempTargets = try await TempTargetStore.fetchNotYetUploaded()
+        let fallback = defaultTargetInUserUnits
+        return tempTargets.map { tempTarget in
+            NightscoutTreatment(
+                duration: Int(truncating: (tempTarget.duration ?? 60) as NSNumber),
+                rawDuration: nil,
+                rawRate: nil,
+                absolute: nil,
+                rate: nil,
+                eventType: .nsTempTarget,
+                createdAt: tempTarget.date ?? Date(),
+                enteredBy: tempTarget.enteredBy ?? TempTarget.local,
+                bolus: nil,
+                insulin: nil,
+                notes: tempTarget.name ?? TempTarget.custom,
+                carbs: nil,
+                targetTop: tempTarget.target ?? fallback,
+                targetBottom: tempTarget.target ?? fallback,
+                id: tempTarget.id?.uuidString
+            )
         }
     }
 
     func getTempTargetRunsNotYetUploadedToNightscout() async throws -> [NightscoutTreatment] {
-        let context = makeContext()
-        context.name = "getTempTargetRunsNotYetUploadedToNightscout"
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TempTargetRunStored.self,
-            onContext: context,
-            predicate: NSPredicate(
-                format: "startDate >= %@ AND isUploadedToNS == %@",
-                Date.oneDayAgo as NSDate,
-                false as NSNumber
-            ),
-            key: "startDate",
-            ascending: false
-        )
-
-        return try await context.perform {
-            guard let fetchedTempTargetRuns = results as? [TempTargetRunStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedTempTargetRuns.map { tempTargetRun in
-                var durationInMinutes = (tempTargetRun.endDate?.timeIntervalSince(tempTargetRun.startDate ?? Date()) ?? 1) / 60
-                durationInMinutes = durationInMinutes < 1 ? 1 : durationInMinutes
-                return NightscoutTreatment(
-                    duration: Int(durationInMinutes),
-                    rawDuration: nil,
-                    rawRate: nil,
-                    absolute: nil,
-                    rate: nil,
-                    eventType: .nsTempTarget,
-                    createdAt: (tempTargetRun.startDate ?? tempTargetRun.tempTarget?.date) ?? Date(),
-                    enteredBy: tempTargetRun.tempTarget?.enteredBy ?? TempTarget.local,
-                    bolus: nil,
-                    insulin: nil,
-                    notes: tempTargetRun.tempTarget?.name ?? TempTarget.custom,
-                    carbs: nil,
-                    targetTop: tempTargetRun
-                        .target as Decimal? ?? (self.settingsManager.settings.units == .mgdL ? 100.0 : 100.asMmolL),
-                    targetBottom: tempTargetRun
-                        .target as Decimal? ?? (self.settingsManager.settings.units == .mgdL ? 100.0 : 100.asMmolL)
-                )
-            }
+        let runs = try await TempTargetRunStore.fetchNotYetUploaded()
+        let fallback = defaultTargetInUserUnits
+        var result: [NightscoutTreatment] = []
+        result.reserveCapacity(runs.count)
+        for run in runs {
+            var durationInMinutes = (run.endDate?.timeIntervalSince(run.startDate ?? Date()) ?? 1) / 60
+            durationInMinutes = durationInMinutes < 1 ? 1 : durationInMinutes
+            // `tempTargetRun.tempTarget?.{date,enteredBy,name}` traversals become a foreign-key lookup.
+            let source = try await TempTargetRunStore.sourceTempTarget(for: run)
+            result.append(NightscoutTreatment(
+                duration: Int(durationInMinutes),
+                rawDuration: nil,
+                rawRate: nil,
+                absolute: nil,
+                rate: nil,
+                eventType: .nsTempTarget,
+                createdAt: (run.startDate ?? source?.date) ?? Date(),
+                enteredBy: source?.enteredBy ?? TempTarget.local,
+                bolus: nil,
+                insulin: nil,
+                notes: source?.name ?? TempTarget.custom,
+                carbs: nil,
+                targetTop: run.target ?? fallback,
+                targetBottom: run.target ?? fallback,
+                id: run.id?.uuidString
+            ))
         }
-    }
-
-    func presets() -> [TempTarget] {
-        storage.retrieve(OpenAPS.Trio.tempTargetsPresets, as: [TempTarget].self)?.reversed() ?? []
+        return result
     }
 }
 

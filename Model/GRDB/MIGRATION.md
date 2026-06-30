@@ -190,12 +190,30 @@ not-yet-uploaded mapping); `TestAssembly` no longer injects a Core Data context 
 The Core Data `OverrideStored`/`OverrideRunStored` entities stay as the read-only migration source
 (the `OverrideStored.EventType` enum is still referenced by the Nightscout mapping).
 
-### 🔧 Step 8 — `TempTargetStored` + `TempTargetRunStored` (planned, not yet implemented)
+### ✅ Step 8 — `TempTargetStored` + `TempTargetRunStored` (done, this branch)
 
-Same family shape as Override (relationship + presets + runs), so **mirror Step 7** — read the
-`OverrideRecord.swift` / `OverrideStorage.swift` / Override call-site diff first; this is largely the
-same transformation. The deltas below are what makes Temp Targets *different* — get these right and
-the rest is a copy of Override. Full call-site map (line-level) lives in the PR notes.
+Same family shape as Override (relationship + presets + runs), so this **mirrors Step 7** — the
+`OverrideRecord.swift` / `OverrideStorage.swift` / Override call-site diff was the template; the
+transformation is largely the same. Records/stores (`TempTargetRecord` + `TempTargetRunRecord`,
+`TempTargetStore`/`TempTargetRunStore`), schema **v7** + `TempTargetMigration` (registered in
+`GRDBStack.bootstrap()` after `OverrideMigration`, gated by `grdb.didMigrateTempTarget`), and ~19
+call-site files moved to GRDB value types (intents, RemoteControl, Watch, LiveActivity, Nightscout,
+OpenAPS, Home/History/Adjustments state + views, SettingsExport, TrioApp cleanup, tests). The
+deltas below are what makes Temp Targets *different* from Override.
+
+**Notable deviations from the original Core Data behavior (intentional, mirroring Step 7):**
+- The Nightscout `NightscoutTreatment` for temp targets / runs now carries the source `id`
+  (string UUID) so `markUploaded(ids:)` can match — the old Core Data path matched on a `nil` `id`
+  and effectively never marked rows uploaded. `disableAllActiveTempTargets` no longer resets
+  `isUploadedToNS` on cancel (the run entry covers the Nightscout cancel), matching Override.
+- `TrioApp` gained `TempTargetStore.deleteOlderThan(days: 3)` + the run equivalent (presets
+  preserved). The pre-GRDB code never pruned temp targets; this adds parity with Override.
+- `updateLatestTempTargetConfigurationOfState` keeps the original (pre-existing) `if !isOverrideEnabled`
+  guard verbatim rather than "fixing" it to `isTempTargetEnabled` — out of migration scope.
+- Same two follow-up fixes as the Override commit: the Adjustments preset list is a live
+  `observePresets()` feed (edits reflect immediately), and the delete-preset confirmation dialog was
+  moved out of the preset `ForEach` onto the stable body (its own `isConfirmDeleteTempTargetPresented`
+  flag) so a list re-render can't dismiss it mid-confirmation.
 
 **Records (`Model/GRDB/TempTargetRecord.swift`)**
 - `TempTargetRecord` — attrs: `id` (**UUID**, stored as TEXT like `OverrideRunRecord.id` — *not* a

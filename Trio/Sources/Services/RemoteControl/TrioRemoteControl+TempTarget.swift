@@ -1,4 +1,3 @@
-import CoreData
 import Foundation
 import UIKit
 
@@ -42,35 +41,18 @@ extension TrioRemoteControl {
 
     @MainActor func disableAllActiveTempTargets() async {
         do {
-            let ids = try await tempTargetsStorage.loadLatestTempTargetConfigurations(fetchLimit: 0)
-            let didPostNotification = try await viewContext.perform { () -> Bool in
-                let results = try ids.compactMap { try self.viewContext.existingObject(with: $0) as? TempTargetStored }
-                guard !results.isEmpty else {
-                    Task { await self.logError("Command rejected: no active temp target to cancel.") }
-                    return false
-                }
-                for canceledTempTarget in results where canceledTempTarget.enabled {
-                    let newTempTargetRunStored = TempTargetRunStored(context: self.viewContext)
-                    newTempTargetRunStored.id = UUID()
-                    newTempTargetRunStored.name = canceledTempTarget.name
-                    newTempTargetRunStored.startDate = canceledTempTarget.date ?? .distantPast
-                    newTempTargetRunStored.endDate = Date()
-                    newTempTargetRunStored.target = canceledTempTarget.target ?? 0
-                    newTempTargetRunStored.tempTarget = canceledTempTarget
-                    newTempTargetRunStored.isUploadedToNS = false
-                    canceledTempTarget.enabled = false
-                    canceledTempTarget.isUploadedToNS = false
-                }
-                if self.viewContext.hasChanges {
-                    try self.viewContext.save()
-                    Foundation.NotificationCenter.default.post(name: .willUpdateTempTargetConfiguration, object: nil)
-                    self.tempTargetsStorage.saveTempTargetsToStorage([TempTarget.cancel(at: Date().addingTimeInterval(-1))])
-                    return true
-                } else {
-                    return false
-                }
+            let active = try await tempTargetsStorage.loadLatestTempTargetConfigurations(fetchLimit: 0)
+            guard !active.isEmpty else {
+                await logError("Command rejected: no active temp target to cancel.")
+                return
             }
-            if didPostNotification { await awaitNotification(.didUpdateTempTargetConfiguration) }
+
+            // Cancel & log a run for any previously active temp target.
+            try await tempTargetsStorage.disableAllActiveTempTargets(except: nil, createRunEntry: true)
+            tempTargetsStorage.saveTempTargetsToStorage([TempTarget.cancel(at: Date().addingTimeInterval(-1))])
+
+            Foundation.NotificationCenter.default.post(name: .willUpdateTempTargetConfiguration, object: nil)
+            await awaitNotification(.didUpdateTempTargetConfiguration)
         } catch {
             debug(.remoteControl, "\(DebuggingIdentifiers.failed) Failed to disable active temp targets: \(error)")
             await logError("Failed to disable temp targets: \(error.localizedDescription)")

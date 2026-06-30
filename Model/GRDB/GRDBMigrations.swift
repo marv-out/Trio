@@ -156,6 +156,49 @@ extension GRDBStack {
             try db.create(index: "overrideRunStored_on_overridePk", on: "overrideRunStored", columns: ["overridePk"])
         }
 
+        // v7 — TempTargetStored + TempTargetRunStored (temp targets, presets, scheduled, and their
+        // runs). Same family shape as v6: the Core Data `tempTarget` to-one relationship becomes the
+        // `tempTargetPk` foreign key on `tempTargetRunStored`. `id` is a UUID stored as TEXT; the 3
+        // temp-target Decimals (`duration`, `target`, `halfBasalTarget`) and the run `target` are
+        // stored as TEXT (lossless), like `TDDRecord`/`OverrideRecord`.
+        migrator.registerMigration("v7_tempTarget") { db in
+            try db.create(table: "tempTargetStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID (string form)
+                t.column("name", .text)
+                t.column("date", .datetime)
+                t.column("enabled", .boolean).notNull().defaults(to: false)
+                t.column("isPreset", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToNS", .boolean).notNull().defaults(to: false)
+                t.column("orderPosition", .integer).notNull().defaults(to: 0)
+                t.column("enteredBy", .text)
+                t.column("duration", .text) // Decimal as string
+                t.column("target", .text)
+                t.column("halfBasalTarget", .text)
+            }
+            // Active/scheduled/main-chart queries filter on date+enabled; presets sort by isPreset.
+            try db.create(index: "tempTargetStored_on_date", on: "tempTargetStored", columns: ["date"])
+            try db.create(index: "tempTargetStored_on_isPreset", on: "tempTargetStored", columns: ["isPreset"])
+            try db.create(index: "tempTargetStored_on_enabled", on: "tempTargetStored", columns: ["enabled"])
+
+            try db.create(table: "tempTargetRunStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID (string form)
+                t.column("name", .text)
+                t.column("startDate", .datetime)
+                t.column("endDate", .datetime)
+                t.column("isUploadedToNS", .boolean).notNull().defaults(to: false)
+                t.column("target", .text) // Decimal as string
+                // Replaces the Core Data `tempTarget` to-one relationship. SET NULL on delete so a
+                // run survives its source temp target being cleaned up (it keeps its own dates/name).
+                t.column("tempTargetPk", .integer)
+                    .references("tempTargetStored", onDelete: .setNull)
+            }
+            // Run queries filter/sort on startDate; the FK lookup resolves the source temp target.
+            try db.create(index: "tempTargetRunStored_on_startDate", on: "tempTargetRunStored", columns: ["startDate"])
+            try db.create(index: "tempTargetRunStored_on_tempTargetPk", on: "tempTargetRunStored", columns: ["tempTargetPk"])
+        }
+
         return migrator
     }
 }

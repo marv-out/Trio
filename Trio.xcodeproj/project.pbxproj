@@ -428,6 +428,8 @@
 		BD00EE3F2FF14764005D482C /* MealPresetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */; };
 		BD00EFD12FF19EFF005D482C /* OverrideRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */; };
 		BD00EFD22FF19EFF005D482C /* OverrideMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */; };
+		BD00F8A12FF1B100005D482C /* TempTargetRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */; };
+		BD00F8A32FF1B100005D482C /* TempTargetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */; };
 		BD04ECCE2D29952A008C5FEB /* BolusProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */; };
 		BD0B2EF32C5998E600B3298F /* MealPresetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD0B2EF22C5998E600B3298F /* MealPresetView.swift */; };
 		BD10516D2DA986E1007C6D89 /* PulsingLogoAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD10516C2DA986DC007C6D89 /* PulsingLogoAnimation.swift */; };
@@ -1384,6 +1386,8 @@
 		BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetMigration.swift; sourceTree = "<group>"; };
 		BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverrideMigration.swift; sourceTree = "<group>"; };
 		BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverrideRecord.swift; sourceTree = "<group>"; };
+		BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetRecord.swift; sourceTree = "<group>"; };
+		BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetMigration.swift; sourceTree = "<group>"; };
 		BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressOverlay.swift; sourceTree = "<group>"; };
 		BD0B2EF22C5998E600B3298F /* MealPresetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetView.swift; sourceTree = "<group>"; };
 		BD10516C2DA986DC007C6D89 /* PulsingLogoAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulsingLogoAnimation.swift; sourceTree = "<group>"; };
@@ -3162,6 +3166,8 @@
 				BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */,
 				BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */,
 				BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */,
+				BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */,
+				BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */,
 				BD00EE1F2FF14764005D482C /* MIGRATION.md */,
 			);
 			path = GRDB;
@@ -5212,6 +5218,8 @@
 				E592A3792CEEC038009A472C /* ContactImageRootView.swift in Sources */,
 				BD00EFD12FF19EFF005D482C /* OverrideRecord.swift in Sources */,
 				BD00EFD22FF19EFF005D482C /* OverrideMigration.swift in Sources */,
+				BD00F8A12FF1B100005D482C /* TempTargetRecord.swift in Sources */,
+				BD00F8A32FF1B100005D482C /* TempTargetMigration.swift in Sources */,
 				BDC531182D1062F200088832 /* ContactImageState.swift in Sources */,
 				BD249D9F2D42FD0600412DEB /* StackedChartSetup.swift in Sources */,
 				E592A37A2CEEC038009A472C /* ContactImageProvider.swift in Sources */,

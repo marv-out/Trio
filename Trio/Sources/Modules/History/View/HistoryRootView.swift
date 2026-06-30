@@ -42,15 +42,9 @@ extension History {
             animation: .bouncy
         ) var carbEntryStored: FetchedResults<CarbEntryStored>
 
-        // Override runs now live in GRDB; `state.overrideRunStored` is kept current via
-        // ValueObservation (see HistoryStateModel), sorted newest-first.
-
-        @FetchRequest(
-            entity: TempTargetRunStored.entity(),
-            sortDescriptors: [NSSortDescriptor(keyPath: \TempTargetRunStored.startDate, ascending: false)],
-            predicate: NSPredicate.tempTargetRunStoredFromOneDayAgo,
-            animation: .bouncy
-        ) var tempTargetRunStored: FetchedResults<TempTargetRunStored>
+        // Override + temp target runs now live in GRDB; `state.overrideRunStored` /
+        // `state.tempTargetRunStored` are kept current via ValueObservation (see HistoryStateModel),
+        // sorted newest-first.
 
         var body: some View {
             historyConfirmations(

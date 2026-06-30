@@ -34,13 +34,13 @@ extension History.RootView {
             )
         }
 
-        let tempTargets = tempTargetRunStored.map { tempTarget -> AdjustmentItem in
+        let tempTargets = state.tempTargetRunStored.map { tempTarget -> AdjustmentItem in
             AdjustmentItem(
-                id: AnyHashable(tempTarget.objectID),
+                id: AnyHashable(tempTarget.id ?? UUID()),
                 name: tempTarget.name ?? String(localized: "Temp Target"),
                 startDate: tempTarget.startDate ?? Date(),
                 endDate: tempTarget.endDate ?? Date(),
-                target: tempTarget.target?.decimalValue,
+                target: tempTarget.target,
                 type: .tempTarget
             )
         }

@@ -44,15 +44,9 @@ extension Adjustments.RootView {
                 }
             }
             .onMove(perform: state.reorderTempTargets)
-            .confirmationDialog(
-                deleteConfirmationTitle,
-                isPresented: $isConfirmDeletePresented,
-                titleVisibility: .visible
-            ) {
-                deleteConfirmationButtons()
-            } message: {
-                deleteConfirmationMessage
-            }
+            // The delete-preset confirmation dialog is attached to the stable body in
+            // `AdjustmentsRootView` (not here, inside the ForEach) so a list re-render — e.g. the
+            // presets ValueObservation re-emitting — can't dismiss it mid-confirmation.
             .listRowBackground(Color.chart)
         } header: {
             Text("Temporary Target Presets")
@@ -64,9 +58,10 @@ extension Adjustments.RootView {
         }
     }
 
-    private func requestTempTargetPresetActivation(_ preset: TempTargetStored) {
+    private func requestTempTargetPresetActivation(_ preset: TempTargetRecord) {
+        guard let pk = preset.pk else { return }
         let activation = PendingPresetActivation.tempTarget(
-            objectID: preset.objectID,
+            pk: pk,
             presetID: preset.id?.uuidString,
             name: preset.name ?? ""
         )
@@ -74,12 +69,12 @@ extension Adjustments.RootView {
         requestPresetActivation(activation)
     }
 
-    private func actionButtonsForTempTargets(for tempTarget: TempTargetStored) -> some View {
+    private func actionButtonsForTempTargets(for tempTarget: TempTargetRecord) -> some View {
         Group {
             Button(role: .destructive) {
                 Task {
                     selectedTempTarget = tempTarget
-                    isConfirmDeletePresented = true
+                    isConfirmDeleteTempTargetPresented = true
                 }
             } label: {
                 Label("Delete", systemImage: "trash.fill")
@@ -95,7 +90,7 @@ extension Adjustments.RootView {
         }
     }
 
-    private var deleteConfirmationTitle: String {
+    var deleteConfirmationTitle: String {
         let presetName = selectedTempTarget?.name ?? ""
         return String(
             localized: "Delete the Temp Target Preset \"\(presetName)\"?",
@@ -103,20 +98,25 @@ extension Adjustments.RootView {
         )
     }
 
-    private func deleteConfirmationButtons() -> some View {
+    func deleteConfirmationButtons() -> some View {
         Group {
             if let itemToDelete = selectedTempTarget {
+                // Compare by rowid: the running temp target and its preset list entry can differ in
+                // mutable fields (enabled/date), so value equality is unreliable here.
+                let isRunningPreset = state.currentActiveTempTarget?.pk == selectedTempTarget?.pk
                 Button(
-                    state.currentActiveTempTarget == selectedTempTarget ? "Stop and Delete" : "Delete",
+                    isRunningPreset ? "Stop and Delete" : "Delete",
                     role: .destructive
                 ) {
-                    if state.currentActiveTempTarget == selectedTempTarget {
+                    if isRunningPreset {
                         Task {
                             await state.disableAllActiveTempTargets(createTempTargetRunEntry: true)
                         }
                     }
-                    Task {
-                        await state.invokeTempTargetPresetDeletion(itemToDelete.objectID)
+                    if let pk = itemToDelete.pk {
+                        Task {
+                            await state.invokeTempTargetPresetDeletion(pk)
+                        }
                     }
                     selectedTempTarget = nil
                 }
@@ -127,8 +127,8 @@ extension Adjustments.RootView {
         }
     }
 
-    private var deleteConfirmationMessage: Text? {
-        if state.currentActiveTempTarget == selectedTempTarget {
+    var deleteConfirmationMessage: Text? {
+        if state.currentActiveTempTarget?.pk == selectedTempTarget?.pk {
             return Text("This Temp Target preset is currently running. Deleting will stop it.")
         }
         return nil
@@ -160,17 +160,14 @@ extension Adjustments.RootView {
     }
 
     private func tempTargetView(
-        for tempTarget: TempTargetStored,
+        for tempTarget: TempTargetRecord,
         showCheckmark: Bool = false,
         onTap: (() -> Void)? = nil
     ) -> some View {
         let target = tempTarget.target ?? 100
-        let tempTargetValue = Decimal(target as! Double.RawValue)
+        let tempTargetValue = target
         let isSelected = tempTarget.id?.uuidString == selectedTempTargetPresetID
-        let tempTargetHalfBasal = Decimal(
-            tempTarget.halfBasalTarget as? Double
-                .RawValue ?? Double(state.settingHalfBasalTarget)
-        )
+        let tempTargetHalfBasal = tempTarget.halfBasalTarget ?? state.settingHalfBasalTarget
         let percentage = Int(
             TempTargetCalculations.computeAdjustedPercentage(
                 halfBasalTarget: tempTargetHalfBasal,
@@ -192,13 +189,13 @@ extension Adjustments.RootView {
                         }
                     }
                     HStack(spacing: 2) {
-                        Text(formattedGlucose(glucose: target as Decimal))
+                        Text(formattedGlucose(glucose: target))
                             .foregroundColor(.secondary)
                             .font(.caption)
                         Text("for")
                             .foregroundColor(.secondary)
                             .font(.caption)
-                        Text("\(Formatter.integerFormatter.string(from: (tempTarget.duration ?? 0) as NSNumber)!)")
+                        Text("\(Formatter.integerFormatter.string(from: NSDecimalNumber(decimal: tempTarget.duration ?? 0))!)")
                             .foregroundColor(.secondary)
                             .font(.caption)
                         Text("min")

@@ -15,8 +15,9 @@ extension Adjustments {
         @State var selectedOverridePresetID: String?
         @State var selectedTempTargetPresetID: String?
         @State var selectedOverride: OverrideRecord?
-        @State var selectedTempTarget: TempTargetStored?
+        @State var selectedTempTarget: TempTargetRecord?
         @State var isConfirmDeletePresented = false
+        @State var isConfirmDeleteTempTargetPresented = false
         @State var isPromptPresented = false
         @State var isRemoveAlertPresented = false
         @State var removeAlert: Alert?
@@ -228,6 +229,17 @@ extension Adjustments {
                         Text("This override preset is currently running. Deleting will stop it.")
                     }
                 }
+                // Temp target delete dialog, likewise on the stable body (its own presentation flag so
+                // it never collides with the override dialog above).
+                .confirmationDialog(
+                    deleteConfirmationTitle,
+                    isPresented: $isConfirmDeleteTempTargetPresented,
+                    titleVisibility: .visible
+                ) {
+                    deleteConfirmationButtons()
+                } message: {
+                    deleteConfirmationMessage
+                }
             }).background(appState.trioBackgroundColor(for: colorScheme))
         }
 
@@ -353,9 +365,9 @@ extension Adjustments {
 
 extension Adjustments.RootView: View {
     enum PendingPresetActivation {
-        // Overrides moved to GRDB: identity is the rowid `pk`. Temp Targets are still Core Data.
+        // Overrides + Temp Targets moved to GRDB: identity is the rowid `pk`.
         case override(pk: Int64, presetID: String?, name: String)
-        case tempTarget(objectID: NSManagedObjectID, presetID: String?, name: String)
+        case tempTarget(pk: Int64, presetID: String?, name: String)
 
         var name: String {
             switch self {
@@ -422,8 +434,8 @@ extension Adjustments.RootView: View {
                     showOverrideCheckmark = false
                 }
 
-            case let .tempTarget(objectID, presetID, _):
-                await state.enactTempTargetPreset(withID: objectID)
+            case let .tempTarget(pk, presetID, _):
+                await state.enactTempTargetPreset(withPk: pk)
 
                 await MainActor.run {
                     selectedTempTargetPresetID = presetID

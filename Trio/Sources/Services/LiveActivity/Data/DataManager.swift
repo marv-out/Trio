@@ -65,20 +65,15 @@ extension LiveActivityManager {
     }
 
     func fetchAndMapTempTarget() async throws -> TempTargetData? {
-        try await fetchAndMapLatest(
-            ofType: TempTargetStored.self,
-            predicate: .predicateForOneDayAgo,
-            key: "date",
-            propertiesToFetch: ["enabled", "name", "target", "date", "duration"]
-        ) { row in
-            TempTargetData(
-                isActive: row["enabled"] as? Bool ?? false,
-                tempTargetName: row["name"] as? String ?? "Temp Target",
-                date: row["date"] as? Date ?? Date(),
-                duration: row["duration"] as? Decimal ?? 0,
-                target: row["target"] as? Decimal ?? 0
-            )
-        }
+        // Temp targets now live in GRDB; read the latest within the last day directly.
+        guard let record = try await TempTargetStore.fetchLastCreated() else { return nil }
+        return TempTargetData(
+            isActive: record.enabled,
+            tempTargetName: record.name ?? "Temp Target",
+            date: record.date ?? Date(),
+            duration: record.duration ?? 0,
+            target: record.target ?? 0
+        )
     }
 
     func fetchAndMapOverride() async throws -> OverrideData? {

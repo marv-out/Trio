@@ -55,6 +55,7 @@ final class GRDBStack {
         try await BatteryMigration.migrateIfNeeded(into: self)
         try await MealPresetMigration.migrateIfNeeded(into: self)
         try await OverrideMigration.migrateIfNeeded(into: self)
+        try await TempTargetMigration.migrateIfNeeded(into: self)
     }
 
     // MARK: - Connection
