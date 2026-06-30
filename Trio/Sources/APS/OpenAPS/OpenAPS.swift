@@ -166,59 +166,44 @@ final class OpenAPS {
     }
 
     private func fetchAndProcessCarbs(
-        on context: NSManagedObjectContext,
         additionalCarbs: Decimal? = nil,
         carbsDate: Date? = nil
     ) async throws -> String {
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: context,
-            predicate: NSPredicate.predicateForOneDayAgo,
-            key: "date",
-            ascending: false
-        )
+        let carbResults = try await CarbEntryStore.fetchForMealCalc()
 
-        let json = try await context.perform {
-            guard let carbResults = results as? [CarbEntryStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
+        var jsonArray = jsonConverter.convertToJSON(carbResults)
 
-            var jsonArray = self.jsonConverter.convertToJSON(carbResults)
+        if let additionalCarbs = additionalCarbs {
+            let formattedDate = carbsDate.map { ISO8601DateFormatter().string(from: $0) } ?? ISO8601DateFormatter()
+                .string(from: Date())
 
-            if let additionalCarbs = additionalCarbs {
-                let formattedDate = carbsDate.map { ISO8601DateFormatter().string(from: $0) } ?? ISO8601DateFormatter()
-                    .string(from: Date())
+            let additionalEntry = [
+                "carbs": Double(additionalCarbs),
+                "actualDate": formattedDate,
+                "id": UUID().uuidString,
+                "note": NSNull(),
+                "protein": 0,
+                "created_at": formattedDate,
+                "isFPU": false,
+                "fat": 0,
+                "enteredBy": "Trio"
+            ] as [String: Any]
 
-                let additionalEntry = [
-                    "carbs": Double(additionalCarbs),
-                    "actualDate": formattedDate,
-                    "id": UUID().uuidString,
-                    "note": NSNull(),
-                    "protein": 0,
-                    "created_at": formattedDate,
-                    "isFPU": false,
-                    "fat": 0,
-                    "enteredBy": "Trio"
-                ] as [String: Any]
+            // Assuming jsonArray is a String, convert it to a list of dictionaries first
+            if let jsonData = jsonArray.data(using: .utf8) {
+                var jsonList = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]]
+                jsonList?.append(additionalEntry)
 
-                // Assuming jsonArray is a String, convert it to a list of dictionaries first
-                if let jsonData = jsonArray.data(using: .utf8) {
-                    var jsonList = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]]
-                    jsonList?.append(additionalEntry)
-
-                    // Convert back to JSON string
-                    if let updatedJsonData = try? JSONSerialization
-                        .data(withJSONObject: jsonList ?? [], options: .prettyPrinted)
-                    {
-                        jsonArray = String(data: updatedJsonData, encoding: .utf8) ?? jsonArray
-                    }
+                // Convert back to JSON string
+                if let updatedJsonData = try? JSONSerialization
+                    .data(withJSONObject: jsonList ?? [], options: .prettyPrinted)
+                {
+                    jsonArray = String(data: updatedJsonData, encoding: .utf8) ?? jsonArray
                 }
             }
-
-            return jsonArray
         }
 
-        return json
+        return jsonArray
     }
 
     private func fetchPumpHistoryObjectIDs(on context: NSManagedObjectContext) async throws -> [NSManagedObjectID]? {
@@ -413,7 +398,6 @@ final class OpenAPS {
         // Perform asynchronous calls in parallel
         async let pumpHistoryObjectIDs = fetchPumpHistoryObjectIDs(on: context) ?? []
         async let carbs = fetchAndProcessCarbs(
-            on: context,
             additionalCarbs: simulatedCarbsAmount ?? 0,
             carbsDate: simulatedCarbsDate
         )
@@ -602,7 +586,7 @@ final class OpenAPS {
 
         // Perform asynchronous calls in parallel
         async let pumpHistoryObjectIDs = fetchPumpHistoryObjectIDs(on: context) ?? []
-        async let carbs = fetchAndProcessCarbs(on: context)
+        async let carbs = fetchAndProcessCarbs()
         async let glucose = fetchAndProcessGlucose(context: context, shouldSmoothGlucose: shouldSmoothGlucose, fetchLimit: nil)
         async let getProfile = loadFileFromStorageAsync(name: Settings.profile)
         async let getBasalProfile = loadFileFromStorageAsync(name: Settings.basalProfile)

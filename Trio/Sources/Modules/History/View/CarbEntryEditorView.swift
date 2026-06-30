@@ -4,7 +4,6 @@
 //
 //  Created by Marvin Polscheit on 15.01.25.
 //
-import CoreData
 import SwiftUI
 
 struct CarbEntryEditorView: View {
@@ -13,13 +12,13 @@ struct CarbEntryEditorView: View {
     @Environment(AppState.self) var appState
 
     var state: History.StateModel
-    let carbEntry: CarbEntryStored
+    let carbEntry: CarbEntryRecord
 
     /*
-     This is the objectID of the entry that the user is editing. It is NOT always the `carbEntry: CarbEntryStored` that we pass to the `CarbEntryEditorView`.
+     This is the rowid (pk) of the entry that the user is editing. It is NOT always the `carbEntry: CarbEntryRecord` that we pass to the `CarbEntryEditorView`.
      We need this because FPUs and carbs are treated completely different and that complicates the update process.
      */
-    @State private var entryToEdit: NSManagedObjectID?
+    @State private var entryToEdit: Int64?
 
     @State private var editedCarbs: Decimal
     @State private var editedFat: Decimal
@@ -28,7 +27,7 @@ struct CarbEntryEditorView: View {
     @State private var isFPU: Bool
     @State private var editedDate: Date
 
-    init(state: History.StateModel, carbEntry: CarbEntryStored) {
+    init(state: History.StateModel, carbEntry: CarbEntryRecord) {
         self.state = state
         self.carbEntry = carbEntry
         _editedCarbs = State(initialValue: 0) // gets updated in the task block
@@ -207,13 +206,15 @@ struct CarbEntryEditorView: View {
              In the first case, we simply need to load the corresponding carb entry. For this case THIS is the entry we want to edit.
              In the second case, we need to load the zero-carb entry that actualy holds the FPU values (and the carbs). For this case THIS is the entry we want to edit.
              */
+            guard let pk = carbEntry.pk else { return }
+
             if carbEntry.isFPU {
-                if let result = await state.handleFPUEntry(carbEntry.objectID) {
+                if let result = await state.handleFPUEntry(pk) {
                     editedCarbs = result.entryValues?.carbs ?? 0
                     editedFat = result.entryValues?.fat ?? 0
                     editedProtein = result.entryValues?.protein ?? 0
                     editedNote = result.entryValues?.note ?? ""
-                    entryToEdit = result.entryID
+                    entryToEdit = result.entryPk
                     editedDate = result.entryValues?.date ?? Date()
                 }
                 /*
@@ -223,13 +224,13 @@ struct CarbEntryEditorView: View {
                  In both cases, we need to simply load the carb entry that holds all the necessary values for us. This is the entry we want to edit.
                  */
             } else {
-                if let values = await state.loadEntryValues(from: carbEntry.objectID) {
+                if let values = await state.loadEntryValues(from: pk) {
                     editedCarbs = values.carbs
                     editedFat = values.fat
                     editedProtein = values.protein
                     editedNote = values.note
                     editedDate = values.date
-                    entryToEdit = carbEntry.objectID
+                    entryToEdit = pk
                 }
             }
         }

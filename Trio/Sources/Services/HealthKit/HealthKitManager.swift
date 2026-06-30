@@ -83,21 +83,9 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
         return controller
     }()
 
-    let carbsUploadControllerDelegate = FetchedResultsControllerDelegate()
-    private lazy var carbsUploadController: NSFetchedResultsController<CarbEntryStored> = {
-        let request = NSFetchRequest<CarbEntryStored>(entityName: "CarbEntryStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \CarbEntryStored.date, ascending: true)]
-        request.predicate = NSPredicate.carbsNotYetUploadedToHealth
-        request.fetchBatchSize = 50
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = carbsUploadControllerDelegate
-        return controller
-    }()
+    // Carbs now live in GRDB; the "not yet uploaded to Health" trigger is a ValueObservation
+    // (see registerUploadControllers) instead of an FRC.
+    private var carbsUploadObservationCancellable: AnyCancellable?
 
     let insulinUploadControllerDelegate = FetchedResultsControllerDelegate()
     private lazy var insulinUploadController: NSFetchedResultsController<PumpEventStored> = {
@@ -134,9 +122,12 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
         glucoseUploadControllerDelegate.onContentChange = { [weak self] in
             Task { await self?.uploadGlucose() }
         }
-        carbsUploadControllerDelegate.onContentChange = { [weak self] in
-            Task { await self?.uploadCarbs() }
-        }
+        // Carbs live in GRDB: a ValueObservation fires when the not-yet-uploaded-to-Health set
+        // changes, replacing the former NSFetchedResultsController.
+        carbsUploadObservationCancellable = CarbEntryStore.observeNotYetUploadedToHealthCount()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                Task { await self?.uploadCarbs() }
+            })
         insulinUploadControllerDelegate.onContentChange = { [weak self] in
             Task { await self?.uploadInsulin() }
         }
@@ -145,7 +136,6 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
         Task { @MainActor in
             do {
                 try self.glucoseUploadController.performFetch()
-                try self.carbsUploadController.performFetch()
                 try self.insulinUploadController.performFetch()
             } catch {
                 debug(.service, "\(DebuggingIdentifiers.failed) Failed to set up HealthKit upload controllers: \(error)")
@@ -361,7 +351,7 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
             try await healthKitStore.save(samples)
             debug(.service, "Successfully stored \(samples.count) carb samples in HealthKit.")
 
-            // After successful upload, update the isUploadedToHealth flag in Core Data
+            // After successful upload, update the isUploadedToHealth flag in GRDB
             await updateCarbsAsUploaded(carbs)
 
         } catch {
@@ -370,26 +360,11 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
     }
 
     private func updateCarbsAsUploaded(_ carbs: [CarbsEntry]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateCarbsAsUploaded"
-        await context.perform {
-            let ids = carbs.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<CarbEntryStored> = CarbEntryStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToHealth = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToHealth: \(error.userInfo)"
-                )
-            }
+        let ids = carbs.compactMap { $0.id.flatMap(UUID.init(uuidString:)) }
+        do {
+            try await CarbEntryStore.markUploadedToHealth(ids: ids)
+        } catch {
+            debug(.service, "\(DebuggingIdentifiers.failed) \(#function) Failed to update isUploadedToHealth: \(error)")
         }
     }
 

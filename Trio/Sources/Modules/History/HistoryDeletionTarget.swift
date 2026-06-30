@@ -5,13 +5,13 @@ extension History {
     enum DeletionTarget: Identifiable {
         case glucose(GlucoseStored)
         case insulin(PumpEventStored)
-        case carbs(CarbEntryStored)
+        case carbs(CarbEntryRecord)
 
-        var id: NSManagedObjectID {
+        var id: AnyHashable {
             switch self {
-            case let .glucose(glucose): return glucose.objectID
-            case let .insulin(pumpEvent): return pumpEvent.objectID
-            case let .carbs(carbEntry): return carbEntry.objectID
+            case let .glucose(glucose): return AnyHashable(glucose.objectID)
+            case let .insulin(pumpEvent): return AnyHashable(pumpEvent.objectID)
+            case let .carbs(carbEntry): return AnyHashable(carbEntry.pk ?? -1)
             }
         }
 

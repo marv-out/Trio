@@ -23,10 +23,12 @@ extension History.RootView {
                     case let .insulin(pumpEvent):
                         state.invokeInsulinDeletionTask(pumpEvent.objectID)
                     case let .carbs(carbEntry):
-                        state.invokeCarbDeletionTask(
-                            carbEntry.objectID,
-                            isFpuOrComplexMeal: carbEntry.isFPU || carbEntry.fat > 0 || carbEntry.protein > 0
-                        )
+                        if let pk = carbEntry.pk {
+                            state.invokeCarbDeletionTask(
+                                pk,
+                                isFpuOrComplexMeal: carbEntry.isFPU || carbEntry.fat > 0 || carbEntry.protein > 0
+                            )
+                        }
                     }
                 }
                 Button("Cancel", role: .cancel) {}

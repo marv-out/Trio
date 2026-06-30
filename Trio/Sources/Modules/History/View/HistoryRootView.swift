@@ -35,12 +35,8 @@ extension History {
             animation: .bouncy
         ) var pumpEventStored: FetchedResults<PumpEventStored>
 
-        @FetchRequest(
-            entity: CarbEntryStored.entity(),
-            sortDescriptors: [NSSortDescriptor(keyPath: \CarbEntryStored.date, ascending: false)],
-            predicate: NSPredicate.carbsHistory,
-            animation: .bouncy
-        ) var carbEntryStored: FetchedResults<CarbEntryStored>
+        // Carbs (+ FPU equivalents) now live in GRDB; `state.carbEntryStored` is kept current via
+        // ValueObservation (see HistoryStateModel), sorted newest-first.
 
         // Override + temp target runs now live in GRDB; `state.overrideRunStored` /
         // `state.tempTargetRunStored` are kept current via ValueObservation (see HistoryStateModel),

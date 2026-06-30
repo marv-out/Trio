@@ -5,8 +5,8 @@ import SwiftUI
 struct CarbView: ChartContent {
     let glucoseData: [GlucoseStored]
     let units: GlucoseUnits
-    let carbData: [CarbEntryStored]
-    let fpuData: [CarbEntryStored]
+    let carbData: [CarbEntryRecord]
+    let fpuData: [CarbEntryRecord]
     let minValue: Decimal
 
     var body: some ChartContent {

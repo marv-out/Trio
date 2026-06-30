@@ -199,6 +199,43 @@ extension GRDBStack {
             try db.create(index: "tempTargetRunStored_on_tempTargetPk", on: "tempTargetRunStored", columns: ["tempTargetPk"])
         }
 
+        // v8 — CarbEntryStored (carb entries + their FPU carb-equivalents). Standalone, no
+        // relationships: `fpuID` is a grouping key (shared by one entry's equivalents), not a
+        // foreign key. `carbs`/`fat`/`protein` are Double in Core Data, so they are stored as
+        // `.double` columns directly — no Decimal↔TEXT dance.
+        migrator.registerMigration("v8_carbEntryStored") { db in
+            try db.create(table: "carbEntryStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID (string form)
+                t.column("date", .datetime)
+                t.column("carbs", .double).notNull().defaults(to: 0)
+                t.column("fat", .double).notNull().defaults(to: 0)
+                t.column("protein", .double).notNull().defaults(to: 0)
+                t.column("note", .text)
+                t.column("isFPU", .boolean).notNull().defaults(to: false)
+                t.column("fpuID", .text) // grouping key for an entry's carb-equivalents (string UUID)
+                t.column("isUploadedToNS", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToHealth", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToTidepool", .boolean).notNull().defaults(to: false)
+            }
+            // Every query filters/sorts on date; isFPU splits carbs vs equivalents; fpuID drives the
+            // delete cascade; each upload channel filters on its own flag.
+            try db.create(index: "carbEntryStored_on_date", on: "carbEntryStored", columns: ["date"])
+            try db.create(index: "carbEntryStored_on_isFPU", on: "carbEntryStored", columns: ["isFPU"])
+            try db.create(index: "carbEntryStored_on_fpuID", on: "carbEntryStored", columns: ["fpuID"])
+            try db.create(index: "carbEntryStored_on_isUploadedToNS", on: "carbEntryStored", columns: ["isUploadedToNS"])
+            try db.create(
+                index: "carbEntryStored_on_isUploadedToHealth",
+                on: "carbEntryStored",
+                columns: ["isUploadedToHealth"]
+            )
+            try db.create(
+                index: "carbEntryStored_on_isUploadedToTidepool",
+                on: "carbEntryStored",
+                columns: ["isUploadedToTidepool"]
+            )
+        }
+
         return migrator
     }
 }

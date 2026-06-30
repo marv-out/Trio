@@ -9,8 +9,8 @@ extension History.RootView {
                 Spacer()
                 filterFutureEntriesButton
             }
-            if !carbEntryStored.isEmpty {
-                ForEach(carbEntryStored.filter({ !showFutureEntries ? $0.date ?? Date() <= Date() : true })) { item in
+            if !state.carbEntryStored.isEmpty {
+                ForEach(state.carbEntryStored.filter({ !showFutureEntries ? $0.date ?? Date() <= Date() : true })) { item in
                     mealView(item)
                 }
             } else {
@@ -22,7 +22,7 @@ extension History.RootView {
         }.listRowBackground(Color.chart)
     }
 
-    @ViewBuilder func mealView(_ meal: CarbEntryStored) -> some View {
+    @ViewBuilder func mealView(_ meal: CarbEntryRecord) -> some View {
         VStack {
             HStack {
                 if meal.isFPU {

@@ -23,6 +23,7 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
     @Injected() private var determinationStorage: DeterminationStorage!
     @Injected() private var overrideStorage: OverrideStorage!
     @Injected() private var tempTargetStorage: TempTargetsStorage!
+    @Injected() private var carbsStorage: CarbsStorage!
     @Injected() private var bolusCalculationManager: BolusCalculationManager!
     @Injected() private var iobService: IOBService!
     @Injected() private var notificationsManager: UserNotificationsManager!
@@ -758,47 +759,36 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
     ///   - date: Timestamp for the carbs entry
     private func handleCarbsRequest(_ amount: Int, _ date: Date) {
         Task {
-            let context = CoreDataStack.shared.newTaskContext()
+            do {
+                let entry = CarbsEntry(
+                    id: UUID().uuidString,
+                    createdAt: date,
+                    actualDate: nil,
+                    carbs: Decimal(amount),
+                    fat: nil,
+                    protein: nil,
+                    note: String(localized: "Via Watch", comment: "Note added to carb entry when entered via watch"),
+                    enteredBy: CarbsEntry.local,
+                    isFPU: false,
+                    fpuID: nil
+                )
+                try await carbsStorage.storeCarbs([entry], areFetchedFromRemote: false)
+                debug(.watchManager, "📱 Saved carbs from watch: \(amount)g at \(date)")
 
-            await context.perform {
-                let carbEntry = CarbEntryStored(context: context)
-                carbEntry.id = UUID()
-                carbEntry.carbs = Double(truncating: amount as NSNumber)
-                carbEntry.date = date
-                carbEntry.note = String(localized: "Via Watch", comment: "Note added to carb entry when entered via watch")
-                carbEntry.isFPU = false // set this to false to ensure watch-entered carbs are displayed in main chart
-                carbEntry.isUploadedToNS = false
-                carbEntry.isUploadedToHealth = false
-                carbEntry.isUploadedToTidepool = false
+                // Acknowledge success
+                self.sendAcknowledgment(
+                    toWatch: true,
+                    message: String(
+                        localized: "Carbs logged successfully.",
+                        comment: "Success message sent to watch when carbs are logged successfully"
+                    ),
+                    ackCode: .carbsLogged
+                )
+            } catch {
+                debug(.watchManager, "❌ Error saving carbs: \(error)")
 
-                do {
-                    guard context.hasChanges else {
-                        // Acknowledge failure
-                        self.sendAcknowledgment(
-                            toWatch: false,
-                            message: "Error! Something went wrong when processing your request.",
-                            ackCode: .genericFailure
-                        )
-                        return
-                    }
-                    try context.save()
-                    debug(.watchManager, "📱 Saved carbs from watch: \(amount)g at \(date)")
-
-                    // Acknowledge success
-                    self.sendAcknowledgment(
-                        toWatch: true,
-                        message: String(
-                            localized: "Carbs logged successfully.",
-                            comment: "Success message sent to watch when carbs are logged successfully"
-                        ),
-                        ackCode: .carbsLogged
-                    )
-                } catch {
-                    debug(.watchManager, "❌ Error saving carbs: \(error)")
-
-                    // Acknowledge failure
-                    self.sendAcknowledgment(toWatch: false, message: "Error logging carbs", ackCode: .genericFailure)
-                }
+                // Acknowledge failure
+                self.sendAcknowledgment(toWatch: false, message: "Error logging carbs", ackCode: .genericFailure)
             }
         }
     }
@@ -810,8 +800,6 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
     ///   - date: Timestamp for the carbs entry
     private func handleCombinedRequest(bolusAmount: Decimal, carbsAmount: Decimal, date: Date) {
         Task {
-            let context = CoreDataStack.shared.newTaskContext()
-
             do {
                 // Notify Watch: "Saving carbs..."
                 self.sendAcknowledgment(
@@ -823,30 +811,21 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
                     ackCode: .savingCarbs
                 )
 
-                // Save carbs entry in Core Data
-                try await context.perform {
-                    let carbEntry = CarbEntryStored(context: context)
-                    carbEntry.id = UUID()
-                    carbEntry.carbs = NSDecimalNumber(decimal: carbsAmount).doubleValue
-                    carbEntry.date = date
-                    carbEntry.note = String(localized: "Via Watch", comment: "Note added to carb entry when entered via watch")
-                    carbEntry.isFPU = false // set this to false to ensure watch-entered carbs are displayed in main chart
-                    carbEntry.isUploadedToNS = false
-                    carbEntry.isUploadedToHealth = false
-                    carbEntry.isUploadedToTidepool = false
-
-                    guard context.hasChanges else {
-                        // Acknowledge failure
-                        self.sendAcknowledgment(
-                            toWatch: false,
-                            message: "Error! Something went wrong when processing your request.",
-                            ackCode: .genericFailure
-                        )
-                        return
-                    }
-                    try context.save()
-                    debug(.watchManager, "📱 Saved carbs from watch: \(carbsAmount) g at \(date)")
-                }
+                // Save carbs entry via GRDB
+                let carbEntry = CarbsEntry(
+                    id: UUID().uuidString,
+                    createdAt: date,
+                    actualDate: nil,
+                    carbs: carbsAmount,
+                    fat: nil,
+                    protein: nil,
+                    note: String(localized: "Via Watch", comment: "Note added to carb entry when entered via watch"),
+                    enteredBy: CarbsEntry.local,
+                    isFPU: false,
+                    fpuID: nil
+                )
+                try await carbsStorage.storeCarbs([carbEntry], areFetchedFromRemote: false)
+                debug(.watchManager, "📱 Saved carbs from watch: \(carbsAmount) g at \(date)")
 
                 // Notify Watch: "Enacting bolus..."
                 sendAcknowledgment(

@@ -1,5 +1,6 @@
 import CoreData
 import Foundation
+import GRDB
 
 /// Migration-specific errors that might happen during migration
 enum JSONImporterError: Error {
@@ -247,17 +248,14 @@ class JSONImporter {
     ///   - JSONImporterError.missingCarbsValueInCarbEntry if a carb entry is missing a `carbs: Decimal` value.
     ///   - An error if the file cannot be read or decoded.
     ///   - An error if the CoreData operation fails.
-    func importCarbHistory(url: URL, now: Date) async throws {
+    /// `pool == nil` uses the shared GRDB store; tests pass an in-memory pool.
+    func importCarbHistory(url: URL, now: Date, in pool: DatabasePool? = nil) async throws {
         let twentyFourHoursAgo = now - 24.hours.timeInterval
         let carbHistoryFull: [CarbsEntry] = try readJsonFile(url: url)
-        let existingDates = try await fetchDates(
-            ofType: CarbEntryStored.self,
-            predicate: .predicateForDateBetween(start: twentyFourHoursAgo, end: now),
-            sortKey: "date",
-            dateKeyPath: \.date
-        )
+        // Carbs live in GRDB; dedupe against the dates already stored in the import window.
+        let existingDates = try await CarbEntryStore.existingDates(from: twentyFourHoursAgo, to: now, pool: pool)
 
-        // Only import carb entries from the last 24 hours that do not exist yet in Core Data
+        // Only import carb entries from the last 24 hours that do not exist yet in GRDB
         // Only import "true" carb entries; ignore all FPU entries (aka carb equivalents)
         let carbHistory = carbHistoryFull
             .filter {
@@ -265,21 +263,8 @@ class JSONImporter {
                 return dateToCheck >= twentyFourHoursAgo && dateToCheck <= now && !existingDates.contains(dateToCheck) && $0
                     .isFPU ?? false == false }
 
-        // Create a background context for batch processing
-        let backgroundContext = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
-        backgroundContext.parent = context
-
-        try await backgroundContext.perform {
-            for carbEntry in carbHistory {
-                try carbEntry.store(in: backgroundContext)
-            }
-
-            try backgroundContext.save()
-        }
-
-        try await context.perform {
-            try self.context.save()
-        }
+        let records = try carbHistory.map { try $0.makeCarbEntryRecord() }
+        try await CarbEntryStore.batchInsert(records, pool: pool)
     }
 
     /// Imports oref determination from a JSON file into CoreData.
@@ -462,26 +447,29 @@ extension CarbsEntry: Codable {
         case fpuID
     }
 
-    /// Helper function to convert `CarbsStored` to `CarbEntryStored` while importing JSON carb entries
-    func store(in context: NSManagedObjectContext) throws {
+    /// Helper function to convert a decoded `CarbsEntry` into a GRDB `CarbEntryRecord` while importing
+    /// JSON carb entries. Imported entries are marked uploaded to all channels (they came from a
+    /// backup/export, so they are not re-uploaded).
+    func makeCarbEntryRecord() throws -> CarbEntryRecord {
         guard carbs >= 0 else {
             throw JSONImporterError.missingCarbsValueInCarbEntry
         }
 
         // skip FPU entries for now
 
-        let carbEntry = CarbEntryStored(context: context)
-        carbEntry.id = id
-            .flatMap({ UUID(uuidString: $0) }) ?? UUID() /// The `CodingKey` of `id` is `_id`, so this fine to use here
-        carbEntry.date = actualDate ?? createdAt
-        carbEntry.carbs = Double(truncating: NSDecimalNumber(decimal: carbs.rounded(toPlaces: 0)))
-        carbEntry.fat = Double(truncating: NSDecimalNumber(decimal: fat?.rounded(toPlaces: 0) ?? 0))
-        carbEntry.protein = Double(truncating: NSDecimalNumber(decimal: protein?.rounded(toPlaces: 0) ?? 0))
-        carbEntry.note = note ?? ""
-        carbEntry.isFPU = false
-        carbEntry.isUploadedToNS = true
-        carbEntry.isUploadedToHealth = true
-        carbEntry.isUploadedToTidepool = true
+        return CarbEntryRecord(
+            id: id.flatMap { UUID(uuidString: $0) } ?? UUID(), /// The `CodingKey` of `id` is `_id`, so this is fine to use here
+            date: actualDate ?? createdAt,
+            carbs: Double(truncating: NSDecimalNumber(decimal: carbs.rounded(toPlaces: 0))),
+            fat: Double(truncating: NSDecimalNumber(decimal: fat?.rounded(toPlaces: 0) ?? 0)),
+            protein: Double(truncating: NSDecimalNumber(decimal: protein?.rounded(toPlaces: 0) ?? 0)),
+            note: note ?? "",
+            isFPU: false,
+            fpuID: nil,
+            isUploadedToNS: true,
+            isUploadedToHealth: true,
+            isUploadedToTidepool: true
+        )
     }
 }
 

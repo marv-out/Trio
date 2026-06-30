@@ -6,6 +6,7 @@
 //
 import CoreData
 import Foundation
+import GRDB
 import Swinject
 import Testing
 
@@ -17,12 +18,15 @@ class BundleReference {}
     var coreDataStack: CoreDataStack!
     var context: NSManagedObjectContext!
     var importer: JSONImporter!
+    var grdb: GRDBStack!
 
     init() async throws {
         // In-memory Core Data for tests
         coreDataStack = try await CoreDataStack.createForTests()
         context = coreDataStack.newTaskContext()
         importer = JSONImporter(context: context, coreDataStack: coreDataStack)
+        // Carbs are imported into GRDB; an in-memory pool backs the carb-import assertions.
+        grdb = try GRDBStack.makeInMemoryForTests()
     }
 
     @Test("Import glucose history with value checks") func testImportGlucoseHistoryDetails() async throws {
@@ -196,17 +200,14 @@ class BundleReference {}
         let url = URL(filePath: path)
 
         let now = Date("2025-04-28T19:32:52.000Z")!
-        try await importer.importCarbHistory(url: url, now: now)
+        try await importer.importCarbHistory(url: url, now: now, in: grdb.pool)
         // run the import againt to check our deduplication logic
-        try await importer.importCarbHistory(url: url, now: now)
+        try await importer.importCarbHistory(url: url, now: now, in: grdb.pool)
 
-        let allCarbEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "date",
-            ascending: false
-        ) as? [CarbEntryStored] ?? []
+        // Newest first (the store orders by date desc).
+        let allCarbEntries = try await grdb.pool.read { db in
+            try CarbEntryRecord.order(CarbEntryRecord.Columns.date.desc).fetchAll(db)
+        }
 
         #expect(allCarbEntries.count == 8)
         #expect(allCarbEntries.first?.carbs == 10)
@@ -223,15 +224,11 @@ class BundleReference {}
 
         // more than 24 hours in the future from the most recent entry
         let now = Date("2025-04-29T19:32:52.000Z")!
-        try await importer.importCarbHistory(url: url, now: now)
+        try await importer.importCarbHistory(url: url, now: now, in: grdb.pool)
 
-        let allCarbEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "date",
-            ascending: false
-        ) as? [CarbEntryStored] ?? []
+        let allCarbEntries = try await grdb.pool.read { db in
+            try CarbEntryRecord.fetchAll(db)
+        }
 
         #expect(allCarbEntries.isEmpty)
     }

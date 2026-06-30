@@ -25,8 +25,14 @@ extension History {
 
         var units: GlucoseUnits = .mgdL
 
-        var carbEntryToEdit: CarbEntryStored?
+        var carbEntryToEdit: CarbEntryRecord?
         var showCarbEntryEditor = false
+
+        // Carbs (+ FPU equivalents) now live in GRDB; the meals list is observed via ValueObservation
+        // instead of a SwiftUI @FetchRequest. The "date >= oneDayAgo" rule (from `carbsHistory`) is
+        // applied in the sink so the tracked region stays deterministic.
+        var carbEntryStored: [CarbEntryRecord] = []
+        @ObservationIgnored private var carbEntryObservationCancellable: AnyCancellable?
 
         // Override + temp target runs now live in GRDB; observed via ValueObservation instead of a
         // SwiftUI @FetchRequest. The "startDate >= oneDayAgo" rule is applied in the sink.
@@ -39,8 +45,26 @@ extension History {
             units = settingsManager.settings.units
             broadcaster.register(DeterminationObserver.self, observer: self)
             broadcaster.register(SettingsObserver.self, observer: self)
+            setupCarbEntryObservation()
             setupOverrideRunObservation()
             setupTempTargetRunObservation()
+        }
+
+        private func setupCarbEntryObservation() {
+            carbEntryObservationCancellable = CarbEntryStore.observeHistory()
+                .receive(on: DispatchQueue.main)
+                .sink(
+                    receiveCompletion: { completion in
+                        if case let .failure(error) = completion {
+                            debug(.default, "\(DebuggingIdentifiers.failed) History carb observation failed: \(error)")
+                        }
+                    },
+                    receiveValue: { [weak self] records in
+                        guard let self else { return }
+                        let cutoff = Date.oneDayAgo
+                        carbEntryStored = records.filter { ($0.date ?? .distantPast) >= cutoff }
+                    }
+                )
         }
 
         private func setupOverrideRunObservation() {

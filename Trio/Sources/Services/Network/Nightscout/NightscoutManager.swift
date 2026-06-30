@@ -188,25 +188,9 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
         return controller
     }()
 
-    let carbEntryUploadControllerDelegate = FetchedResultsControllerDelegate()
-    lazy var carbEntryUploadController: NSFetchedResultsController<CarbEntryStored> = {
-        let request = NSFetchRequest<CarbEntryStored>(entityName: "CarbEntryStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \CarbEntryStored.date, ascending: true)]
-        request.predicate = NSPredicate(
-            format: "date >= %@ AND isUploadedToNS == %@",
-            Date.oneDayAgo as NSDate,
-            false as NSNumber
-        )
-        request.fetchBatchSize = 50
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = carbEntryUploadControllerDelegate
-        return controller
-    }()
+    // Carbs (+ their FPU equivalents) now live in GRDB; the "not yet uploaded" trigger is a
+    // ValueObservation (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
+    var carbEntryUploadObservationCancellable: AnyCancellable?
 
     let glucoseUploadControllerDelegate = FetchedResultsControllerDelegate()
     lazy var glucoseUploadController: NSFetchedResultsController<GlucoseStored> = {
@@ -845,8 +829,8 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
 
     func uploadCarbs() async {
         do {
-            try await uploadCarbs(carbsStorage.getCarbsNotYetUploadedToNightscout())
-            try await uploadCarbs(carbsStorage.getFPUsNotYetUploadedToNightscout())
+            try await uploadCarbs(carbsStorage.getCarbsNotYetUploadedToNightscout(), areFPUs: false)
+            try await uploadCarbs(carbsStorage.getFPUsNotYetUploadedToNightscout(), areFPUs: true)
         } catch {
             debug(
                 .nightscout,
@@ -981,7 +965,11 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
         }
     }
 
-    private func uploadCarbs(_ treatments: [NightscoutTreatment]) async {
+    /// Uploads carb (or FPU) treatments. `areFPUs` selects the upload-completion match key: a carb
+    /// treatment carries `id = carbEntry.id` (matched on `id`), while an FPU treatment carries
+    /// `id = carbEntry.fpuID` and represents a whole FPU group (matched on `fpuID`). Without the
+    /// split, FPU rows would never be marked uploaded and would re-upload forever.
+    private func uploadCarbs(_ treatments: [NightscoutTreatment], areFPUs: Bool) async {
         guard !treatments.isEmpty, let nightscout = nightscoutAPI, isUploadEnabled else {
             return
         }
@@ -991,8 +979,8 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
                 try await nightscout.uploadTreatments(Array(chunk))
             }
 
-            // If successful, update the isUploadedToNS property of the CarbEntryStored objects
-            await updateCarbsAsUploaded(treatments)
+            // If successful, mark the corresponding GRDB carb entries as uploaded to Nightscout.
+            try await updateCarbsAsUploaded(treatments, areFPUs: areFPUs)
 
             debug(.nightscout, "Treatments uploaded")
         } catch {
@@ -1000,27 +988,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
         }
     }
 
-    private func updateCarbsAsUploaded(_ treatments: [NightscoutTreatment]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateCarbsAsUploaded"
-        await context.perform {
-            let ids = treatments.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<CarbEntryStored> = CarbEntryStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToNS = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error.userInfo)"
-                )
-            }
+    private func updateCarbsAsUploaded(_ treatments: [NightscoutTreatment], areFPUs: Bool) async throws {
+        // The treatment `id` is the carb entry's `id` (carbs) or its `fpuID` (FPUs).
+        let ids = treatments.compactMap { $0.id.flatMap(UUID.init(uuidString:)) }
+        if areFPUs {
+            try await CarbEntryStore.markFPUsUploadedToNightscout(fpuIDs: ids)
+        } else {
+            try await CarbEntryStore.markUploadedToNightscout(ids: ids)
         }
     }
 

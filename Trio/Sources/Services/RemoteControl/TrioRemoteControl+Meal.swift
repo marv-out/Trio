@@ -36,24 +36,16 @@ extension TrioRemoteControl {
         }
 
         let payloadDate = Date(timeIntervalSince1970: payload.timestamp)
-        let taskContext = CoreDataStack.shared.newTaskContext()
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self, onContext: taskContext, predicate: NSPredicate(
-                format: "date > %@",
-                payloadDate as NSDate
-            ), key: "date", ascending: false
-        )
+        let recentCarbEntries = try await CarbEntryStore.fetchRecent()
+            .filter { ($0.date ?? .distantPast) > payloadDate }
 
-        await taskContext.perform {
-            guard let recentCarbEntries = results as? [CarbEntryStored] else { return }
-            if !recentCarbEntries.isEmpty {
-                Task {
-                    await self.logError(
-                        "Command rejected: newer carb entries have been logged since the command was sent.",
-                        payload: payload
-                    )
-                    return
-                }
+        if !recentCarbEntries.isEmpty {
+            Task {
+                await self.logError(
+                    "Command rejected: newer carb entries have been logged since the command was sent.",
+                    payload: payload
+                )
+                return
             }
         }
 

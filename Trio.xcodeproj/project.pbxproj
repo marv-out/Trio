@@ -428,6 +428,8 @@
 		BD00EE3F2FF14764005D482C /* MealPresetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */; };
 		BD00EFD12FF19EFF005D482C /* OverrideRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */; };
 		BD00EFD22FF19EFF005D482C /* OverrideMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */; };
+		BD00F0522FF3C426005D482C /* CarbEntryMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0502FF3C426005D482C /* CarbEntryMigration.swift */; };
+		BD00F0532FF3C426005D482C /* CarbEntryRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0512FF3C426005D482C /* CarbEntryRecord.swift */; };
 		BD00F8A12FF1B100005D482C /* TempTargetRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */; };
 		BD00F8A32FF1B100005D482C /* TempTargetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */; };
 		BD04ECCE2D29952A008C5FEB /* BolusProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */; };
@@ -1386,6 +1388,8 @@
 		BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MealPresetMigration.swift; sourceTree = "<group>"; };
 		BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverrideMigration.swift; sourceTree = "<group>"; };
 		BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverrideRecord.swift; sourceTree = "<group>"; };
+		BD00F0502FF3C426005D482C /* CarbEntryMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarbEntryMigration.swift; sourceTree = "<group>"; };
+		BD00F0512FF3C426005D482C /* CarbEntryRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarbEntryRecord.swift; sourceTree = "<group>"; };
 		BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetRecord.swift; sourceTree = "<group>"; };
 		BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetMigration.swift; sourceTree = "<group>"; };
 		BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressOverlay.swift; sourceTree = "<group>"; };
@@ -3149,30 +3153,6 @@
 			path = "HomeStateModel+Setup";
 			sourceTree = "<group>";
 		};
-		BD00F0010000A000005D482C /* GRDB */ = {
-			isa = PBXGroup;
-			children = (
-				BD00EE1C2FF14764005D482C /* GRDBStack.swift */,
-				BD00EE1B2FF14764005D482C /* GRDBMigrations.swift */,
-				BD00EE1D2FF14764005D482C /* LoopStat.swift */,
-				BD00EE1E2FF14764005D482C /* LoopStatMigration.swift */,
-				BD00EE302FF14764005D482C /* TDDRecord.swift */,
-				BD00EE322FF14764005D482C /* TDDMigration.swift */,
-				BD00EE342FF14764005D482C /* ContactImageRecord.swift */,
-				BD00EE362FF14764005D482C /* ContactImageMigration.swift */,
-				BD00EE382FF14764005D482C /* BatteryRecord.swift */,
-				BD00EE3A2FF14764005D482C /* BatteryMigration.swift */,
-				BD00EE3C2FF14764005D482C /* MealPresetRecord.swift */,
-				BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */,
-				BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */,
-				BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */,
-				BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */,
-				BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */,
-				BD00EE1F2FF14764005D482C /* MIGRATION.md */,
-			);
-			path = GRDB;
-			sourceTree = "<group>";
-		};
 		587A54C82BCDCE0F009D38E2 /* Model */ = {
 			isa = PBXGroup;
 			children = (
@@ -3293,6 +3273,32 @@
 				DD07CA5A2CE950B9002D45A9 /* MealPreset */,
 			);
 			path = View;
+			sourceTree = "<group>";
+		};
+		BD00F0010000A000005D482C /* GRDB */ = {
+			isa = PBXGroup;
+			children = (
+				BD00F0502FF3C426005D482C /* CarbEntryMigration.swift */,
+				BD00F0512FF3C426005D482C /* CarbEntryRecord.swift */,
+				BD00EE1C2FF14764005D482C /* GRDBStack.swift */,
+				BD00EE1B2FF14764005D482C /* GRDBMigrations.swift */,
+				BD00EE1D2FF14764005D482C /* LoopStat.swift */,
+				BD00EE1E2FF14764005D482C /* LoopStatMigration.swift */,
+				BD00EE302FF14764005D482C /* TDDRecord.swift */,
+				BD00EE322FF14764005D482C /* TDDMigration.swift */,
+				BD00EE342FF14764005D482C /* ContactImageRecord.swift */,
+				BD00EE362FF14764005D482C /* ContactImageMigration.swift */,
+				BD00EE382FF14764005D482C /* BatteryRecord.swift */,
+				BD00EE3A2FF14764005D482C /* BatteryMigration.swift */,
+				BD00EE3C2FF14764005D482C /* MealPresetRecord.swift */,
+				BD00EE3E2FF14764005D482C /* MealPresetMigration.swift */,
+				BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */,
+				BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */,
+				BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */,
+				BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */,
+				BD00EE1F2FF14764005D482C /* MIGRATION.md */,
+			);
+			path = GRDB;
 			sourceTree = "<group>";
 		};
 		BD175EC00000100000000001 /* HistoryStateModel+Deletion */ = {
@@ -5256,6 +5262,8 @@
 				711C0CB42CAABE788916BC9D /* ManualTempBasalDataFlow.swift in Sources */,
 				DD1745222C55524800211FAC /* SMBSettingsProvider.swift in Sources */,
 				BF1667ADE69E4B5B111CECAE /* ManualTempBasalProvider.swift in Sources */,
+				BD00F0522FF3C426005D482C /* CarbEntryMigration.swift in Sources */,
+				BD00F0532FF3C426005D482C /* CarbEntryRecord.swift in Sources */,
 				583684062BD178DB00070A60 /* GlucoseStored+helper.swift in Sources */,
 				49B9B57F2D5768D2009C6B59 /* AdjustmentStored+Helper.swift in Sources */,
 				F90692D6274B9A450037068D /* HealthKitStateModel.swift in Sources */,

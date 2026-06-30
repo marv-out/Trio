@@ -87,8 +87,8 @@ extension Home {
         var waitForSuggestion: Bool = false
         var glucoseFromPersistence: [GlucoseStored] = []
         var latestTwoGlucoseValues: [GlucoseStored] = []
-        var carbsFromPersistence: [CarbEntryStored] = []
-        var fpusFromPersistence: [CarbEntryStored] = []
+        var carbsFromPersistence: [CarbEntryRecord] = []
+        var fpusFromPersistence: [CarbEntryRecord] = []
         var determinationsFromPersistence: [OrefDetermination] = []
         var enactedAndNonEnactedDeterminations: [OrefDetermination] = []
         var fetchedTDDs: [TDD] = []
@@ -155,36 +155,10 @@ extension Home {
             return controller
         }()
 
-        @ObservationIgnored let carbsControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var carbsController: NSFetchedResultsController<CarbEntryStored> = {
-            let request = NSFetchRequest<CarbEntryStored>(entityName: "CarbEntryStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \CarbEntryStored.date, ascending: false)]
-            request.predicate = NSPredicate.carbsForChart
-            request.fetchBatchSize = 5
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = carbsControllerDelegate
-            return controller
-        }()
-
-        @ObservationIgnored let fpuControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var fpuController: NSFetchedResultsController<CarbEntryStored> = {
-            let request = NSFetchRequest<CarbEntryStored>(entityName: "CarbEntryStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \CarbEntryStored.date, ascending: false)]
-            request.predicate = NSPredicate.fpusForChart
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = fpuControllerDelegate
-            return controller
-        }()
+        // Carbs + FPUs now live in GRDB; the chart lists are kept current via ValueObservation
+        // instead of Core Data NSFetchedResultsControllers. See CarbSetup.
+        @ObservationIgnored var carbsObservationCancellable: AnyCancellable?
+        @ObservationIgnored var fpusObservationCancellable: AnyCancellable?
 
         @ObservationIgnored let enactedDeterminationControllerDelegate = FetchedResultsControllerDelegate()
         @ObservationIgnored private(set) lazy var enactedDeterminationController: NSFetchedResultsController<OrefDetermination> =

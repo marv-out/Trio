@@ -56,6 +56,7 @@ final class GRDBStack {
         try await MealPresetMigration.migrateIfNeeded(into: self)
         try await OverrideMigration.migrateIfNeeded(into: self)
         try await TempTargetMigration.migrateIfNeeded(into: self)
+        try await CarbEntryMigration.migrateIfNeeded(into: self)
     }
 
     // MARK: - Connection

@@ -1,5 +1,6 @@
 import CoreData
 import Foundation
+import GRDB
 import Swinject
 import Testing
 
@@ -10,13 +11,15 @@ import Testing
     let resolver: Resolver
     var coreDataStack: CoreDataStack!
     var testContext: NSManagedObjectContext!
+    var grdb: GRDBStack!
 
     init() async throws {
-        // Create test context
+        // Carbs live in GRDB now: an in-memory pool backs the carb assertions. A Core Data test
+        // context is still needed for the other storages the assembler graph builds.
         coreDataStack = try await CoreDataStack.createForTests()
         testContext = coreDataStack.newTaskContext()
+        grdb = try GRDBStack.makeInMemoryForTests()
 
-        // Create assembler with test assembly
         let assembler = Assembler([
             StorageAssembly(),
             ServiceAssembly(),
@@ -31,6 +34,12 @@ import Testing
         injectServices(resolver)
     }
 
+    /// The resolved `BaseCarbsStorage` (for `settings` injection), used to exercise the FPU split
+    /// through the storage layer against the in-memory pool via the `in:` seam. Force-cast: the test
+    /// assembly always registers `BaseCarbsStorage`.
+    // swiftlint:disable:next force_cast
+    private var base: BaseCarbsStorage { storage as! BaseCarbsStorage }
+
     @Test("Storage is correctly initialized") func testStorageInitialization() {
         #expect(storage != nil, "CarbsStorage should be injected")
         #expect(storage is BaseCarbsStorage, "Storage should be of type BaseCarbsStorage")
@@ -38,47 +47,32 @@ import Testing
     }
 
     @Test("Store and retrieve carbs entries") func testStoreAndRetrieveCarbs() async throws {
-        // Given
-        let testEntries = [
-            CarbsEntry(
-                id: UUID().uuidString,
-                createdAt: Date(),
-                actualDate: Date(),
-                carbs: 20,
-                fat: 0,
-                protein: 0,
-                note: "Test meal",
-                enteredBy: "Test",
-                isFPU: false,
-                fpuID: nil
-            )
-        ]
-
-        // When
-        try await storage.storeCarbs(testEntries, areFetchedFromRemote: false)
-        let recentEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "date",
-            ascending: false
+        let testEntry = CarbsEntry(
+            id: UUID().uuidString,
+            createdAt: Date(),
+            actualDate: Date(),
+            carbs: 20,
+            fat: 0,
+            protein: 0,
+            note: "Test meal",
+            enteredBy: "Test",
+            isFPU: false,
+            fpuID: nil
         )
 
-        guard let recentEntries = recentEntries as? [CarbEntryStored] else {
-            throw TestError("Failed to get recent entries")
-        }
+        try await base.storeCarbs([testEntry], areFetchedFromRemote: false, in: grdb.pool)
 
-        // Then
-        #expect(!recentEntries.isEmpty, "Should have stored entries")
+        let recentEntries = try await CarbEntryStore.fetchForMealCalc(pool: grdb.pool)
+
         #expect(recentEntries.count == 1, "Should have exactly one entry")
         #expect(recentEntries[0].carbs == 20, "Carbs value should match")
         #expect(recentEntries[0].fat == 0, "Fat value should match")
         #expect(recentEntries[0].protein == 0, "Protein value should match")
         #expect(recentEntries[0].note == "Test meal", "Note should match")
+        #expect(recentEntries[0].isFPU == false, "Should be a carb entry")
     }
 
-    @Test("Delete carbs entry") func testDeleteCarbsEntry() async throws {
-        // Given
+    @Test("Delete single carb entry by pk") func testDeleteCarbsEntry() async throws {
         let testEntry = CarbsEntry(
             id: UUID().uuidString,
             createdAt: Date(),
@@ -92,52 +86,44 @@ import Testing
             fpuID: nil
         )
 
-        // When
-        try await storage.storeCarbs([testEntry], areFetchedFromRemote: false)
+        try await base.storeCarbs([testEntry], areFetchedFromRemote: false, in: grdb.pool)
 
-        // Get the stored entry's ObjectID
-        let storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "carbs == 30"),
-            key: "date",
-            ascending: false
-        ) as? [CarbEntryStored]
-
-        guard let objectID = storedEntries?.first?.objectID else {
-            throw TestError("Failed to get stored entry's ObjectID")
+        let stored = try await CarbEntryStore.fetchForMealCalc(pool: grdb.pool)
+        guard let pk = stored.first?.pk else {
+            throw TestError("Failed to get stored entry's pk")
         }
 
-        // Delete the entry
-        await storage.deleteCarbsEntryStored(objectID)
+        try await CarbEntryStore.delete(pk: pk, pool: grdb.pool)
 
-        // Then - verify deletion
-        let remainingEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "carbs == 30"),
-            key: "date",
-            ascending: false
-        ) as? [CarbEntryStored]
+        let remaining = try await CarbEntryStore.fetchForMealCalc(pool: grdb.pool)
+        #expect(remaining.isEmpty, "Should have no entries after deletion")
+    }
 
-        #expect(remainingEntries?.isEmpty == true, "Should have no entries after deletion")
+    @Test("Delete cascade removes all rows sharing fpuID") func testDeleteCascadeByFpuID() async throws {
+        let fpuID = UUID()
+        let baseDate = Date(timeIntervalSince1970: 1_700_010_000)
+
+        // One carb-bearing parent row + two FPU equivalents, all sharing one fpuID.
+        let parent = CarbEntryRecord(id: UUID(), date: baseDate, carbs: 30, fat: 20, protein: 10, isFPU: false, fpuID: fpuID)
+        let fpu1 = CarbEntryRecord(id: UUID(), date: baseDate.addingTimeInterval(3600), carbs: 15, isFPU: true, fpuID: fpuID)
+        let fpu2 = CarbEntryRecord(id: UUID(), date: baseDate.addingTimeInterval(5400), carbs: 15, isFPU: true, fpuID: fpuID)
+        try await CarbEntryStore.batchInsert([parent, fpu1, fpu2], pool: grdb.pool)
+
+        #expect(try await CarbEntryStore.fetchByFpuID(fpuID, pool: grdb.pool).count == 3, "All three rows should be stored")
+
+        let deleted = try await CarbEntryStore.deleteByFpuID(fpuID, pool: grdb.pool)
+        #expect(deleted == 3, "Should delete all three rows sharing the fpuID")
+        #expect(try await CarbEntryStore.fetchByFpuID(fpuID, pool: grdb.pool).isEmpty, "No rows should remain for the fpuID")
     }
 
     @Test(
         "Store carb entry with fat/protein creates capped, spaced FPU entries (defaults: adjustment=0.5, delay=60m)"
     ) func testStoreFatProteinCarbEntryCreatesFPUEntries() async throws {
-        let fpuID = UUID().uuidString
+        let fpuID = UUID()
         let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
 
-        // Defaults:
-        // adjustment = 0.5, delay = 60
-        //
-        // fat=50g -> 450 kcal
-        // protein=100g -> 400 kcal
-        // kcal total = 850
-        // (kcal/10) = 85
-        // 85 * 0.5 = 42.5
-        // Int(42.5) = 42 equivalents -> two FPU entries: 21g each
+        // Defaults: adjustment = 0.5, delay = 60
+        // fat=50g -> 450 kcal; protein=100g -> 400 kcal; total 850; (kcal/10)=85; 85*0.5=42 -> two 21g entries.
         let mealEntry = CarbsEntry(
             id: UUID().uuidString,
             createdAt: baseDate,
@@ -148,23 +134,12 @@ import Testing
             note: "FPU deterministic default split test",
             enteredBy: "Test",
             isFPU: false,
-            fpuID: fpuID
+            fpuID: fpuID.uuidString
         )
 
-        try await storage.storeCarbs([mealEntry], areFetchedFromRemote: false)
+        try await base.storeCarbs([mealEntry], areFetchedFromRemote: false, in: grdb.pool)
 
-        let storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "fpuID == %@", fpuID),
-            key: "date",
-            ascending: true
-        ) as? [CarbEntryStored]
-
-        guard let storedEntries else {
-            throw TestError("Failed to fetch entries for fpuID")
-        }
-
+        let storedEntries = try await CarbEntryStore.fetchByFpuID(fpuID, pool: grdb.pool)
         #expect(!storedEntries.isEmpty, "Should have stored entries")
 
         let originalCarbEntry = storedEntries.first(where: { $0.isFPU == false })
@@ -174,55 +149,36 @@ import Testing
         #expect(originalCarbEntry?.protein == 100, "Original protein should match")
 
         let fpuEntries = storedEntries.filter { $0.isFPU == true }
-        #expect(fpuEntries.count == 2, "Expected exactly one FPU entry under default settings")
-        #expect(Int(fpuEntries[0].carbs) == 21, "Expected 20g carb equivalents under default settings")
+        #expect(fpuEntries.count == 2, "Expected exactly two FPU entries under default settings")
 
         for fpuEntry in fpuEntries {
             #expect(fpuEntry.fat == 0, "FPU fat must be 0")
             #expect(fpuEntry.protein == 0, "FPU protein must be 0")
             #expect(fpuEntry.carbs >= 10, "FPU carbs must be >= 10g")
             #expect(fpuEntry.carbs <= 33, "FPU carbs must be <= 33g")
-            #expect(Double(fpuEntry.carbs).truncatingRemainder(dividingBy: 1) == 0, "FPU carbs must be whole grams")
+            #expect(fpuEntry.carbs.truncatingRemainder(dividingBy: 1) == 0, "FPU carbs must be whole grams")
         }
 
-        let scheduledTotal = fpuEntries.reduce(0) { partialResult, fpuEntry in
-            partialResult + Int(fpuEntry.carbs)
-        }
+        let scheduledTotal = fpuEntries.reduce(0.0) { $0 + $1.carbs }
         #expect(scheduledTotal <= 99, "Scheduled FPU carbs must be capped at 99g")
 
-        // Timing: stable assertions
-        // - first FPU entry must be at least +60m after the *input* timestamp (createdAt/actualDate),
-        //   but storage may choose a different internal baseDate, so don't assert exact equality.
         let fpuDates = fpuEntries.compactMap(\.date).sorted()
-        #expect(fpuDates.count == 2, "FPU entry should have a date")
-
-        let firstFpuDate = fpuDates[0]
+        #expect(fpuDates.count == 2, "Both FPU entries should have a date")
         #expect(
-            firstFpuDate >= baseDate.addingTimeInterval(60 * 60),
+            fpuDates[0] >= baseDate.addingTimeInterval(60 * 60),
             "First FPU entry should not be scheduled earlier than +60 minutes after the input timestamp"
         )
 
-        #expect(
-            storedEntries.allSatisfy { $0.fpuID?.uuidString == fpuID },
-            "All entries should share the same fpuID"
-        )
+        #expect(storedEntries.allSatisfy { $0.fpuID == fpuID }, "All entries should share the same fpuID")
     }
 
     @Test(
         "Store very large fat/protein meal caps FPU equivalents at 99g and splits into 3×33g (defaults: adjustment=0.5, delay=60m)"
     ) func testStoreVeryLargeFatProteinMealCapsAndSplits() async throws {
-        let fpuID = UUID().uuidString
+        let fpuID = UUID()
         let baseDate = Date(timeIntervalSince1970: 1_700_001_000)
 
-        // Defaults:
-        // adjustment = 0.5, delay = 60
-        //
-        // fat=200g -> 1800 kcal
-        // protein=200g -> 800 kcal
-        // kcal total = 2600
-        // (kcal/10) = 260
-        // 260 * 0.5 = 130
-        // Int(130) = 130 -> capped to 99 -> split into [33, 33, 33]
+        // fat=200g -> 1800 kcal; protein=200g -> 800 kcal; total 2600; (kcal/10)=260; 260*0.5=130 -> capped 99 -> [33,33,33].
         let heftyMealEntry = CarbsEntry(
             id: UUID().uuidString,
             createdAt: baseDate,
@@ -233,86 +189,42 @@ import Testing
             note: "Hefty BBQ meal - cap test",
             enteredBy: "Test",
             isFPU: false,
-            fpuID: fpuID
+            fpuID: fpuID.uuidString
         )
 
-        try await storage.storeCarbs([heftyMealEntry], areFetchedFromRemote: false)
+        try await base.storeCarbs([heftyMealEntry], areFetchedFromRemote: false, in: grdb.pool)
 
-        let storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "fpuID == %@", fpuID),
-            key: "date",
-            ascending: true
-        ) as? [CarbEntryStored]
-
-        guard let storedEntries else {
-            throw TestError("Failed to fetch entries for fpuID")
-        }
-
-        #expect(!storedEntries.isEmpty, "Should have stored entries")
-
-        let originalCarbEntry = storedEntries.first(where: { $0.isFPU == false })
-        #expect(originalCarbEntry != nil, "Should have one non-FPU original entry")
-        #expect(originalCarbEntry?.carbs == 30, "Original carbs should match")
-        #expect(originalCarbEntry?.fat == 200, "Original fat should match")
-        #expect(originalCarbEntry?.protein == 200, "Original protein should match")
-
+        let storedEntries = try await CarbEntryStore.fetchByFpuID(fpuID, pool: grdb.pool)
         let fpuEntries = storedEntries.filter { $0.isFPU == true }
         #expect(fpuEntries.count == 3, "Capped large meal should create exactly 3 FPU entries")
 
-        let fpuGrams = fpuEntries.map { Int($0.carbs) }
+        let fpuGrams = fpuEntries.map { Int($0.carbs) }.sorted()
         #expect(fpuGrams == [33, 33, 33], "Expected capped split to be [33, 33, 33]")
 
-        let scheduledTotal = fpuEntries.reduce(0) { partialResult, fpuEntry in
-            partialResult + Int(fpuEntry.carbs)
-        }
+        let scheduledTotal = fpuEntries.reduce(0) { $0 + Int($1.carbs) }
         #expect(scheduledTotal == 99, "Total scheduled FPU grams should be exactly 99g after cap")
 
-        for fpuEntry in fpuEntries {
-            #expect(fpuEntry.fat == 0, "FPU entry fat must be 0")
-            #expect(fpuEntry.protein == 0, "FPU entry protein must be 0")
-            #expect(fpuEntry.carbs >= 10, "FPU entry carbs must be >= 10g")
-            #expect(fpuEntry.carbs <= 33, "FPU entry carbs must be <= 33g")
-            #expect(Double(fpuEntry.carbs).truncatingRemainder(dividingBy: 1) == 0, "FPU carbs must be whole grams")
-        }
-
-        // Timing: stable assertions
         let fpuDates = fpuEntries.compactMap(\.date).sorted()
         #expect(fpuDates.count == 3, "All FPU entries should have a date")
-
-        let firstFpuDate = fpuDates[0]
         #expect(
-            firstFpuDate >= baseDate.addingTimeInterval(60 * 60),
+            fpuDates[0] >= baseDate.addingTimeInterval(60 * 60),
             "First FPU entry should not be scheduled earlier than +60 minutes after the input timestamp"
         )
-
         for index in 1 ..< fpuDates.count {
             let spacingSeconds = fpuDates[index].timeIntervalSince(fpuDates[index - 1])
             #expect(Int(spacingSeconds) == 30 * 60, "FPU entries should be spaced +30 minutes apart")
         }
 
-        #expect(
-            storedEntries.allSatisfy { $0.fpuID?.uuidString == fpuID },
-            "All entries should share the same fpuID"
-        )
+        #expect(storedEntries.allSatisfy { $0.fpuID == fpuID }, "All entries should share the same fpuID")
     }
 
     @Test(
         "Store small fat/protein meal drops FPU equivalents when total would be <10g (defaults: adjustment=0.5, delay=60m)"
     ) func testStoreSmallFatProteinMealDropsFPUBelowMinimum() async throws {
-        let fpuID = UUID().uuidString
+        let fpuID = UUID()
         let baseDate = Date(timeIntervalSince1970: 1_700_002_000)
 
-        // Defaults:
-        // adjustment = 0.5
-        //
-        // fat=2g -> 18 kcal
-        // protein=2g -> 8 kcal
-        // kcal total = 26
-        // (kcal/10) = 2.6
-        // 2.6 * 0.5 = 1.3
-        // Int(1.3) = 1 (<10) -> should be dropped (no FPU entries)
+        // fat=2g -> 18 kcal; protein=2g -> 8 kcal; total 26; (kcal/10)=2.6; 2.6*0.5=1 (<10) -> dropped.
         let smallMealEntry = CarbsEntry(
             id: UUID().uuidString,
             createdAt: baseDate,
@@ -323,42 +235,21 @@ import Testing
             note: "Tiny macros - min threshold test",
             enteredBy: "Test",
             isFPU: false,
-            fpuID: fpuID
+            fpuID: fpuID.uuidString
         )
 
-        try await storage.storeCarbs([smallMealEntry], areFetchedFromRemote: false)
+        try await base.storeCarbs([smallMealEntry], areFetchedFromRemote: false, in: grdb.pool)
 
-        let storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "fpuID == %@", fpuID),
-            key: "date",
-            ascending: true
-        ) as? [CarbEntryStored]
-
-        guard let storedEntries else {
-            throw TestError("Failed to fetch entries for fpuID")
-        }
-
-        #expect(!storedEntries.isEmpty, "Should have stored at least the original entry")
-
+        let storedEntries = try await CarbEntryStore.fetchByFpuID(fpuID, pool: grdb.pool)
         let originalCarbEntry = storedEntries.first(where: { $0.isFPU == false })
         #expect(originalCarbEntry != nil, "Should have one non-FPU original entry")
         #expect(originalCarbEntry?.carbs == 30, "Original carbs should match")
-        #expect(originalCarbEntry?.fat == 2, "Original fat should match")
-        #expect(originalCarbEntry?.protein == 2, "Original protein should match")
 
         let fpuEntries = storedEntries.filter { $0.isFPU == true }
-        #expect(fpuEntries.isEmpty == true, "No FPU entries should be created when equivalents are <10g")
-
-        #expect(
-            storedEntries.allSatisfy { $0.fpuID?.uuidString == fpuID },
-            "All entries should share the same fpuID"
-        )
+        #expect(fpuEntries.isEmpty, "No FPU entries should be created when equivalents are <10g")
     }
 
     @Test("Get carbs not yet uploaded to Nightscout") func testGetCarbsNotYetUploadedToNightscout() async throws {
-        // Given
         let testEntry = CarbsEntry(
             id: UUID().uuidString,
             createdAt: Date(),
@@ -372,18 +263,16 @@ import Testing
             fpuID: nil
         )
 
-        // When
-        try await storage.storeCarbs([testEntry], areFetchedFromRemote: false)
-        let notUploadedEntries = try await storage.getCarbsNotYetUploadedToNightscout()
+        try await base.storeCarbs([testEntry], areFetchedFromRemote: false, in: grdb.pool)
 
-        // Then
-        #expect(!notUploadedEntries.isEmpty, "Should have entries not uploaded to NS")
-        #expect(notUploadedEntries[0].carbs == 40, "Carbs value should match")
+        let notUploaded = try await CarbEntryStore.fetchCarbsNotYetUploadedToNightscout(pool: grdb.pool)
+        #expect(notUploaded.count == 1, "Should have one carb entry not uploaded to NS")
+        #expect(notUploaded[0].carbs == 40, "Carbs value should match")
+        #expect(notUploaded[0].isFPU == false, "Should be a carb (non-FPU) entry")
     }
 
     @Test("Get FPUs not yet uploaded to Nightscout") func testGetFPUsNotYetUploadedToNightscout() async throws {
-        // Given
-        let fpuID = UUID().uuidString
+        let fpuID = UUID()
         let testEntry = CarbsEntry(
             id: UUID().uuidString,
             createdAt: Date(),
@@ -394,50 +283,43 @@ import Testing
             note: "FPU test",
             enteredBy: "Test",
             isFPU: false,
-            fpuID: fpuID
+            fpuID: fpuID.uuidString
         )
 
-        // When
-        try await storage.storeCarbs([testEntry], areFetchedFromRemote: false)
+        try await base.storeCarbs([testEntry], areFetchedFromRemote: false, in: grdb.pool)
 
-        // First verify all stored entries
-        let allStoredEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: CarbEntryStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "fpuID == %@", fpuID),
-            key: "date",
-            ascending: true
-        ) as? [CarbEntryStored]
+        let allStoredEntries = try await CarbEntryStore.fetchByFpuID(fpuID, pool: grdb.pool)
+        #expect(allStoredEntries.count > 1, "Should have multiple entries due to FPU splitting")
 
-        // Then verify the stored entries
-        #expect(allStoredEntries?.isEmpty == false, "Should have stored entries")
-        #expect(allStoredEntries?.count ?? 0 > 1, "Should have multiple entries due to FPU splitting")
-
-        // Original carb-non-fpu entry should be stored with original fat and protein values and isFPU set to false
-        let carbNonFpuEntry = allStoredEntries?.first(where: { $0.isFPU == false })
-        #expect(carbNonFpuEntry != nil, "Should have one carb non-fpu entry")
+        let carbNonFpuEntry = allStoredEntries.first(where: { $0.isFPU == false })
         #expect(carbNonFpuEntry?.carbs == 30, "Original carbs should match")
-        #expect(carbNonFpuEntry?.protein == 10, "Original carbs should match")
-        #expect(carbNonFpuEntry?.fat == 20, "Original carbs should match")
+        #expect(carbNonFpuEntry?.protein == 10, "Original protein should match")
+        #expect(carbNonFpuEntry?.fat == 20, "Original fat should match")
 
-        // Additional carb-fpu entries should be created for fat/protein with isFPU set to true and the carbs set to the amount of each carbEquivalent
-        let carbFpuEntry = allStoredEntries?.filter { $0.isFPU == true }
-        #expect(carbFpuEntry?.isEmpty == false, "Should have additional carb-fpu entries")
-
-        // Now test the Nightscout upload function
-        let notUploadedFPUs = try await storage.getFPUsNotYetUploadedToNightscout()
-
-        // Then verify Nightscout entries
+        let notUploadedFPUs = try await CarbEntryStore.fetchFPUsNotYetUploadedToNightscout(pool: grdb.pool)
         #expect(!notUploadedFPUs.isEmpty, "Should have FPUs not uploaded to NS")
         let fpu = notUploadedFPUs[0]
-        #expect(fpu.carbs ?? 0 < 30, "Original carbs value should match")
-        #expect(fpu.protein == 0, "Protein value should match")
-        #expect(fpu.fat == 0, "Fat value should match")
+        #expect(fpu.carbs < 30, "FPU carb-equivalent should be less than the meal carbs")
+        #expect(fpu.protein == 0, "FPU protein value should be 0")
+        #expect(fpu.fat == 0, "FPU fat value should be 0")
+        #expect(notUploadedFPUs.allSatisfy { $0.fpuID == fpuID }, "All FPUs should share the same fpuID")
+    }
 
-        // Verify all entries share the same fpuID
+    @Test("Mark carbs uploaded to a channel by id") func testMarkUploaded() async throws {
+        let id = UUID()
+        let record = CarbEntryRecord(id: id, date: Date(), carbs: 25, isFPU: false)
+        try await CarbEntryStore.store(record, pool: grdb.pool)
+
         #expect(
-            allStoredEntries?.allSatisfy { $0.fpuID?.uuidString == fpuID } == true,
-            "All entries should share the same fpuID"
+            try await CarbEntryStore.fetchNotYetUploadedToHealth(pool: grdb.pool).count == 1,
+            "Entry should start not uploaded to Health"
+        )
+
+        try await CarbEntryStore.markUploadedToHealth(ids: [id], pool: grdb.pool)
+
+        #expect(
+            try await CarbEntryStore.fetchNotYetUploadedToHealth(pool: grdb.pool).isEmpty,
+            "Entry should be marked uploaded to Health"
         )
     }
 }

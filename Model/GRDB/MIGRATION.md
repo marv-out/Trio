@@ -304,7 +304,7 @@ return records). `PendingPresetActivation.tempTarget(objectID:)` → `.tempTarge
 against an in-memory pool; `TestAssembly` drops the Core Data `contextProvider` for the TT storage
 (but keeps the `FileStorage`/`Broadcaster`/`SettingsManager` injections).
 
-### 🔧 Step 9 — `CarbEntryStored` (+ `DeletedGlucoseStored`) (planned, not yet implemented)
+### 🔧 Step 9 — `CarbEntryStored` (✅ 9a done, this branch) (+ `DeletedGlucoseStored` 9b, planned)
 
 **No relationships** — both entities are standalone (verified against the `.xcdatamodel`: zero
 to-one/to-many). So this is *simpler than Override/TempTarget* structurally (no foreign key, no
@@ -318,7 +318,32 @@ the PR notes (~30 non-test files).
 inside the glucose-deletion path (`GlucoseStorage`), so it could also reasonably be folded into the
 later `GlucoseStored` step instead. Pick one; don't block carbs on it.
 
-#### 9a — `CarbEntryStored`
+#### 9a — `CarbEntryStored` (✅ done, this branch)
+
+Done as planned below, with these notable implementation decisions:
+- **Record persistence is manual, not plain `Codable`.** The plan suggested a plain `Codable` record
+  (like `ContactImageRecord`), but `CarbEntryStored`'s `Encodable` conformance (the oref/meal JSON with
+  `actualDate`/`created_at`/`enteredBy` keys) collides with GRDB's column mapping. So `CarbEntryRecord`
+  uses a manual `init(row:)` + `encode(to container:)` (GRDB's `PersistenceContainer` overload, like
+  `TempTargetRecord`) for persistence, **and** a separate Swift `Encodable` (`encode(to encoder:)`) for
+  the oref JSON. The two `encode` methods have different signatures, so one struct carries both;
+  `OpenAPS.fetchAndProcessCarbs` passes `[CarbEntryRecord]` straight to `jsonConverter.convertToJSON`.
+- **Nightscout mark-uploaded is split by `areFPUs`** (the TempTarget nil-id class of bug): carb
+  treatments match on `id`, FPU treatments on `fpuID`. `NightscoutManager.uploadCarbs(_:areFPUs:)` →
+  `markUploadedToNightscout(ids:)` / `markFPUsUploadedToNightscout(fpuIDs:)`. Health/Tidepool match on
+  `id` (`markUploadedToHealth/Tidepool(ids:)`).
+- **All three upload FRCs moved** (not just Nightscout): the Health (`HealthKitManager`) and Tidepool
+  (`TidepoolManager`) `carbsUploadController`s also became `observeNotYetUploadedTo*Count()` cancellables.
+- **History meals list** uses a new `CarbEntryStore.observeHistory()` (tracks `carbs > 0`; subscriber
+  applies `date >= oneDayAgo`), fed into `History.StateModel.carbEntryStored`. The FPU-vs-carb edit
+  resolution (`getCorrespondingCarbEntry`/`getZeroCarbNonFPUEntry`) uses `fetchByFpuID(_:)` + a Swift
+  filter; all of `HistoryStateModel+CarbEditing`/`+Carbs`, `CarbEntryEditorView`, `HistoryDeletionTarget`
+  moved from `NSManagedObjectID` to `pk: Int64`.
+- **Test seams.** `BaseCarbsStorage.storeCarbs(_:areFetchedFromRemote:in:)` and
+  `JSONImporter.importCarbHistory(url:now:in:)` take an optional `DatabasePool` (default `nil` = shared),
+  mirroring `BaseTDDStorage.hasSufficientTDD(in:)`, so `CarbsStorageTests`/`JSONImporterTests` exercise
+  the FPU split + dedupe against an in-memory pool. Delete-cascade and the not-yet-uploaded fetches are
+  tested at the `CarbEntryStore` level directly. `TestAssembly` drops the Core Data `contextProvider`.
 
 **Record (`Model/GRDB/CarbEntryRecord.swift`)**
 - Attrs (all map 1:1): `id` (UUID), `date`, `carbs`/`fat`/`protein` (**`Double`, NOT Decimal** — Core

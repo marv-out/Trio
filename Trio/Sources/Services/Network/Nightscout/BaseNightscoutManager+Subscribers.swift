@@ -60,9 +60,12 @@ extension BaseNightscoutManager {
         pumpEventUploadControllerDelegate.onContentChange = { [weak self] in
             self?.requestUpload(.pumpHistory)
         }
-        carbEntryUploadControllerDelegate.onContentChange = { [weak self] in
-            self?.requestUpload(.carbs)
-        }
+        // Carbs + FPUs live in GRDB: a ValueObservation fires when the not-yet-uploaded set changes,
+        // replacing the former NSFetchedResultsController.
+        carbEntryUploadObservationCancellable = CarbEntryStore.observeNotYetUploadedToNightscoutCount()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                self?.requestUpload(.carbs)
+            })
         glucoseUploadControllerDelegate.onContentChange = { [weak self] in
             self?.requestUpload(.glucose)
         }
@@ -72,7 +75,6 @@ extension BaseNightscoutManager {
             do {
                 try self.determinationUploadController.performFetch()
                 try self.pumpEventUploadController.performFetch()
-                try self.carbEntryUploadController.performFetch()
                 try self.glucoseUploadController.performFetch()
             } catch {
                 debug(.nightscout, "\(DebuggingIdentifiers.failed) Failed to set up Nightscout upload controllers: \(error)")
