@@ -304,12 +304,113 @@ return records). `PendingPresetActivation.tempTarget(objectID:)` → `.tempTarge
 against an in-memory pool; `TestAssembly` drops the Core Data `contextProvider` for the TT storage
 (but keeps the `FileStorage`/`Broadcaster`/`SettingsManager` injections).
 
-### ⏳ After Temp Targets
+### 🔧 Step 9 — `CarbEntryStored` (+ `DeletedGlucoseStored`) (planned, not yet implemented)
 
-1. `CarbEntryStored`, `DeletedGlucoseStored`.
-2. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
-3. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
-4. `GlucoseStored` — highest read volume; uses `ValueObservation` for the live charts.
+**No relationships** — both entities are standalone (verified against the `.xcdatamodel`: zero
+to-one/to-many). So this is *simpler than Override/TempTarget* structurally (no foreign key, no
+preset/run split), but the **surface is larger** (~3 upload channels, FPU equivalents, History
+editing, JSON import, Stats, meal calc). Still mirror Steps 7–8 for the record/store/observation
+patterns; the deltas below are what makes Carbs different. Full call-site map (line-level) lives in
+the PR notes (~30 non-test files).
+
+⚠️ **Recommend splitting the work**: do **CarbEntryStored first (9a)**, ship/verify, then
+**DeletedGlucoseStored (9b)** — they share nothing. `DeletedGlucoseStored` is tiny but lives entirely
+inside the glucose-deletion path (`GlucoseStorage`), so it could also reasonably be folded into the
+later `GlucoseStored` step instead. Pick one; don't block carbs on it.
+
+#### 9a — `CarbEntryStored`
+
+**Record (`Model/GRDB/CarbEntryRecord.swift`)**
+- Attrs (all map 1:1): `id` (UUID), `date`, `carbs`/`fat`/`protein` (**`Double`, NOT Decimal** — Core
+  Data uses `Double` here, so store as `.double` columns directly; **no TEXT/Decimal dance** like the
+  previous steps), `note` (String), `isFPU` (Bool), `fpuID` (UUID? — a *grouping key*, not a
+  relationship), and **three** upload flags `isUploadedToNS` / `isUploadedToHealth` /
+  `isUploadedToTidepool`. `pk` = rowid. Use `MutablePersistableRecord` (set `pk` in `didInsert`,
+  per the Step 7 note). Since there are no Decimals, a plain `Codable` GRDB record works (like
+  `ContactImageRecord`) — no manual `Row`/`encode`.
+- Port `CarbEntryStored: Encodable` (custom `actualDate`/`created_at`/`enteredBy` keys, see
+  `CarbEntryStored+helper.swift`) onto the record (or onto a mapper) — check who consumes it before
+  dropping it (the meal/oref JSON).
+
+**Schema v8 + `CarbEntryMigration`** — one `carbEntryStored` table; indexes on `date`, `isFPU`,
+`fpuID` (the delete-cascade filters on it), and the three `isUploadedTo*` flags (each upload channel
+queries one). Register in `GRDBStack.bootstrap()` after `TempTargetMigration`, gated by
+`grdb.didMigrateCarbEntry`. One-time straight copy (no relationship to resolve).
+
+**Store API** (`CarbEntryStore`): `store(_:)` (single carb), `batchInsertFPUs(_:)` (the FPU
+equivalents — replaces `NSBatchInsertRequest` with a loop of inserts in one `write` transaction),
+`fetchCarbsForChart` / `fetchFPUsForChart` (`isFPU` + `date >= oneDayAgo` [+ `carbs > 0` for carbs]),
+`fetchForStats` (`carbsForStats`, 3 months), `fetchNotYetUploaded(channel:)` for the 3 channels,
+`fetchForMealCalc` (OpenAPS), `delete(pk:)`, `deleteByFpuID(_:)`, `markUploaded(channel:ids:)`,
+`deleteOlderThan(days:)`, and observations `observeCarbsForChart` / `observeFPUsForChart` /
+`observeNotYetUploadedCount(channel:)`.
+
+**FPU specifics (no Override analog) — preserve exactly.** `storeCarbs` splits a fat/protein entry
+into delayed carb-equivalent rows (`processFPU` / `splitIntoCarbEquivalents` — pure functions, leave
+them in the storage layer untouched), all sharing one `fpuID`, marked `isFPU = true`, with
+Health/Tidepool flags deliberately left unset. Keep that grouping. The `updateSubject.send(())` fired
+after the FPU batch insert drives the Home FPU array — either keep `updatePublisher` as the
+"something changed" signal **and** add `observeFPUsForChart`, or replace it with the observation
+(prefer keeping `updatePublisher`: `AppleWatchManager` + others subscribe to it).
+
+**Delete cascade — preserve.** `deleteCarbsEntryStored(objectID)` → `delete(pk:)`. The existing logic:
+if the entry has a `fpuID`, batch-delete **all** rows sharing it (`deleteByFpuID`); otherwise delete
+the single carb-only row. Carry both branches over.
+
+**Upload flags — three channels, mind the matching key (TempTarget nil-id class of bug).**
+- The Nightscout **carb** treatment carries `id = carbEntry.id` → `markUploaded(.nightscout, ids:)`
+  matches on `id`. The Nightscout **FPU** treatment carries `id = carbEntry.fpuID` → its
+  `markUploaded` must match on **`fpuID`**, not `id`. Verify the current `updateCarbsAsUploaded`
+  (`NightscoutManager`) handles both (it matches `id IN …`); split into id-match (carbs) and
+  fpuID-match (FPUs) so FPUs actually get marked.
+- HealthKit (`HealthKitManager` ~L372–390) and Tidepool (`TidepoolManager` ~L281–287) currently
+  re-find rows **by date** to set their flag. Prefer matching by `id`/`pk` in the GRDB version (more
+  robust), but check the existing behavior first.
+- 3 upload FRCs (`NightscoutManager.carbEntryUploadController` `isUploadedToNS==false`,
+  `HealthKitManager` `isUploadedToHealth==false`, `TidepoolManager` `isUploadedToTidepool==false`) →
+  `observeNotYetUploadedCount(channel:)`.
+
+**Reactivity / call sites (~mirror Step 8):**
+- `HomeStateModel` `carbsController` / `fpuController` FRCs → `observeCarbsForChart` /
+  `observeFPUsForChart` (new `CarbSetup`); `carbsFromPersistence` / `fpusFromPersistence` →
+  `[CarbEntryRecord]`. `CarbView` (`carbData`/`fpuData`) → records.
+- `History`: `HistoryRootView` `@FetchRequest` (carbs) → a `History.StateModel` observation;
+  `CarbEntryEditorView(carbEntry: CarbEntryStored)` → value `CarbEntryRecord` + save via store update;
+  `HistoryDeletionTarget.carbs(CarbEntryStored)` → `.carbs(CarbEntryRecord)`; the several
+  `existingObject(with:) as? CarbEntryStored` casts in `HistoryStateModel+CarbEditing` /
+  `+Carbs` → record fetches by `pk`. Edit-then-update must use `CarbEntryStore.update`.
+- `OpenAPS.fetchAndProcessCarbs` (meal calc): pre-fetch via GRDB **before** the CD `perform` block,
+  like `fetchActiveTempTargets` in Step 8.
+- `Stat` `MealStatsSetup` (carbsForStats) → `CarbEntryStore.fetchForStats`.
+- `TrioRemoteControl+Meal`, `AppleWatchManager` (`handleCarbsRequest` / `handleCombinedRequest`
+  create `CarbEntryStored`) → go through `storeCarbs` (value types); the `+Meal` recent-carb read →
+  store fetch.
+- `CarbPresetIntentRequest` already calls `storeCarbs` (no change beyond signature).
+- `JSONImporter` (`+Model/JSONImporter.swift`, creates `CarbEntryStored` on import; `CarbsStored` →
+  `CarbEntryStored` legacy conversion) → `CarbEntryRecord` inserts. Update `JSONImporterTests`.
+
+**Cleanup parity / tests.** `TrioApp` `batchDeleteOlderThan(CarbEntryStored, days: 90)` →
+`CarbEntryStore.deleteOlderThan(days: 90)`. Rewrite `CarbsStorageTests` against an in-memory pool
+(the FPU split + delete-cascade + the 3 not-yet-uploaded fetches are the important cases);
+`TestAssembly` drops the Core Data `contextProvider` for `CarbsStorage` (keeps `FileStorage` /
+`Broadcaster` / `SettingsManager`).
+
+#### 9b — `DeletedGlucoseStored` (optional companion)
+
+Tiny standalone entity (3 attrs: `date`, `glucose` `Int16`, `isManualGlucoseEntry` `Bool`) recording
+deleted manual readings so Nightscout can delete them remotely. Written only in `GlucoseStorage`
+(manual-glucose delete path, ~L779) and read by the NS deletion upload (FRC ~`GlucoseStorage:88`).
+Schema **v9** + `DeletedGlucoseMigration` (gated `grdb.didMigrateDeletedGlucose`); `DeletedGlucoseStore`
+with `store`, `fetchNotYetUploaded`/observe, `delete`, `deleteOlderThan(90)`. Touches `GlucoseStorage`
+(but **not** `GlucoseStored`, which stays in Core Data) + `TrioApp` cleanup + `GlucoseStorageTests`.
+If this entanglement with the glucose path feels risky, defer it to the `GlucoseStored` step.
+
+### ⏳ After Carbs
+
+1. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
+2. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
+3. `GlucoseStored` (+ `DeletedGlucoseStored`, if deferred) — highest read volume; uses
+   `ValueObservation` for the live charts.
 
 ## Cleanup (after all entities migrated & proven)
 
