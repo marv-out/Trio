@@ -430,11 +430,148 @@ with `store`, `fetchNotYetUploaded`/observe, `delete`, `deleteOlderThan(90)`. To
 (but **not** `GlucoseStored`, which stays in Core Data) + `TrioApp` cleanup + `GlucoseStorageTests`.
 If this entanglement with the glucose path feels risky, defer it to the `GlucoseStored` step.
 
-### ⏳ After Carbs
+### 🔧 Step 10 — `OrefDetermination` + `Forecast` + `ForecastValue` (planned, not yet implemented)
 
-1. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.
+The **first hot-path family** and the deepest relationship graph so far: a two-level tree
+`OrefDetermination —(1:n forecasts)→ Forecast —(1:n forecastValues)→ ForecastValue`. Unlike
+Override/TempTarget (one relationship), this needs **two** foreign keys, and it is written **every
+loop cycle** by `determineBasal` and read reactively by the Home forecast/COB/IOB charts. Mirror
+Steps 7–8 for the record/store/observation/FK patterns; the deltas below are what makes the
+determination family different. Full call-site map (line-level) lives in the PR notes (~22 files).
+
+⚠️ **Hot path.** `OpenAPS.processDetermination` runs at the end of every `determineBasal`. The GRDB
+write must stay a single fast transaction and must not block the dosing decision. This is the first
+entity where a slow/incorrect migration has loop-timing consequences — treat reads/writes here as
+performance-sensitive and verify on-device loop cadence before merging.
+
+#### Records (`Model/GRDB/OrefDeterminationRecord.swift`)
+
+- `OrefDeterminationRecord` — ~31 attrs. The **~24 Decimals** (`bolus`, `carbRatio`, `currentTarget`,
+  `duration`, `eventualBG`, `expectedDelta`, `glucose`, `insulinForManualBolus`, `insulinReq`,
+  `insulinSensitivity`, `iob`, `manualBolusErrorString`, `minDelta`, `rate`, `reservoir`,
+  `scheduledBasal`, `sensitivityRatio`, `smbToDeliver`, `tempBasal`, `threshold`) stored as **TEXT**
+  with a manual `FetchableRecord`/`MutablePersistableRecord` (like `TDDRecord`/`OverrideRecord`).
+  `cob`/`carbsRequired` are `Int16`; `enacted`/`received`/`isUploadedToNS` are `Bool`;
+  `deliverAt`/`timestamp`/`timestampEnacted` are `Date?`; `id` is a `UUID` (TEXT); `reason`/`temp`
+  are `String?`. `pk` = rowid. `Hashable`/`Identifiable`. **`MutablePersistableRecord`** (the store
+  returns the inserted record so callers read `pk` back — see the Step 8 note).
+- `ForecastRecord` — `id` (UUID), `type` (String: `iob`/`zt`/`cob`/`uam`), `date` (Date), and
+  `orefDeterminationPk: Int64?` foreign key replacing the `orefDetermination` to-one. **Nullable** FK:
+  `OpenAPS.processAndSave`/`createForecast` create *orphan* forecasts (no determination — the
+  Treatments bolus preview), so the FK must allow `nil`. `ON DELETE CASCADE`.
+- `ForecastValueRecord` — `index` (Int32), `value` (Int32), `forecastPk: Int64?` foreign key replacing
+  the `forecast` to-one. `ON DELETE CASCADE`.
+- ⚠️ **Cascade, not nullify.** Core Data declares both relationships `Nullify`, but the actual
+  lifecycle deletes children with the parent (`TrioApp` batch-deletes `ForecastValue` via its parent
+  `Forecast`, and forecasts/values are conceptually owned by their determination). `ON DELETE CASCADE`
+  on both FKs is the correct GRDB equivalent and removes the need for the parent/child batch-delete
+  helper: deleting an `OrefDetermination` wipes its `Forecast`s and (transitively) their
+  `ForecastValue`s; the 2-day forecast prune wipes values too.
+
+#### Schema v9 + `OrefDeterminationMigration`
+
+Three tables: `orefDeterminationStored` (index on `deliverAt`, `timestamp`, `enacted`,
+`isUploadedToNS`), `forecastStored` (index on `date`, `type`, `orefDeterminationPk`),
+`forecastValueStored` (index on `forecastPk`, `index`). Both FKs `ON DELETE CASCADE`. Register in
+`GRDBStack.bootstrap()` after `CarbEntryMigration`, gated by `grdb.didMigrateOrefDetermination`.
+The one-time copy resolves the two relationships by legacy `NSManagedObjectID` → new `pk`, two levels
+deep (determination → its forecasts → each forecast's values), exactly as `OverrideMigration` did one
+level. Orphan forecasts (no `orefDetermination`) copy with `orefDeterminationPk = nil`.
+
+#### Store API (`OrefDeterminationStore` / `ForecastStore`)
+
+`OrefDeterminationStore`: `fetchLast(within:enactedOnly:)` (replaces `fetchLastDeterminationObjectID`
++ the `enactedDetermination`/`predicateFor30MinAgoForDetermination` predicates — returns the record,
+no `objectID`), `fetchEnacted()` (`enacted == true AND timestamp >= halfHourAgo`, limit 1),
+`fetchForCobIobCharts()` (`deliverAt >= oneDayAgo`), `store(_:)` (returns record with `pk`),
+`updateEnacted(pk:enacted:)` (sets `timestamp = now`, `enacted`, `isUploadedToNS = false` — the
+`reportEnacted` mutation), `markUploaded(ids:)`, `fetchEnactedNotYetUploaded()` /
+`fetchSuggestedNotYetUploaded()`, `deleteOlderThan(days:)`, and observations `observeEnacted()`,
+`observeForCobIobCharts()`, `observeNotYetUploadedCount()`.
+
+`ForecastStore`: `store(forecasts:for determinationPk:)` (inserts forecasts + their values in one
+transaction, linking via the two FKs), `storeOrphan(forecasts:)` (the bolus-preview path, `nil` FK),
+`fetchHierarchy(for determinationPk:)` (returns `[(ForecastRecord, [ForecastValueRecord])]`, values
+sorted by `index`, capped at the first 36 — **replaces the entire `fetchForecastHierarchy` →
+`fetchForecastObjects` → `existingObject` objectID dance + the `relationshipKeyPathsForPrefetching`
+N+1 workaround**), `fetchValues(type:for determinationPk:)` (replaces `parseForecastValues`, returns
+`[Int]`), `deleteOlderThan(days:)`.
+
+#### Identity / hot-path write (replaces `NSManagedObjectID` passing)
+
+`OpenAPS.processDetermination` builds value types and writes in one transaction: insert the
+`OrefDeterminationRecord` → read back its `pk` → insert each `ForecastRecord` with
+`orefDeterminationPk` → insert each `ForecastValueRecord` with `forecastPk`. `APSManager.reportEnacted`
+→ `OrefDeterminationStore.fetchLast(within: 30.minutes)` + `updateEnacted(pk:)` (drops the
+`existingObject(with:)` round-trip). `OpenAPS.processAndSave`/`createForecast` →
+`ForecastStore.storeOrphan`. The whole `DeterminationStorage` protocol drops `NSManagedObjectID` /
+`in context:` params and deals in records / `pk`s; `getForecastIDs`/`getForecastValueIDs`/
+`fetchForecastObjects` collapse into `ForecastStore.fetchHierarchy`.
+
+#### Reactivity / call sites (~22 files)
+
+- `HomeStateModel`: `enactedDeterminationController` FRC → `observeEnacted()`; `determinationController`
+  FRC (`determinationsForCobIobCharts`) → `observeForCobIobCharts()` (see `DeterminationSetup`).
+  `determinationsFromPersistence`/`enactedAndNonEnactedDeterminations` → `[OrefDeterminationRecord]`.
+- **Forecast preprocessing** (`ForecastSetup.preprocessForecastData`/`updateForecastData`): replace the
+  objectID hierarchy + `viewContext.existingObject` materialization + the `SELF IN %@` prefetch with a
+  single `ForecastStore.fetchHierarchy(for: latestDeterminationPk)`. `preprocessedData` becomes
+  `[(id: UUID, forecast: ForecastRecord, forecastValue: ForecastValueRecord)]`; `ForecastView` holds
+  records. The min/max envelope math is unchanged.
+- `Treatments`: `determinationController` FRC (`predicateFor30MinAgoForDetermination`) → store
+  fetch/observe; `determination: [OrefDeterminationRecord]`, `preprocessedData` → records.
+  `ForecastChart` reads `eventualBG`/`predictionsForChart` off records.
+- `MainChartView`: `findDetermination(in:)` + `selectedCOBValue`/`selectedIOBValue` →
+  `[OrefDeterminationRecord]`.
+- `Nightscout`: `determinationUploadController` FRC → `observeNotYetUploadedCount()`;
+  `getOrefDeterminationNotYetUploadedToNightscout` + `parseForecastValues` →
+  `OrefDeterminationStore` + `ForecastStore.fetchValues`; `updateOrefDeterminationAsUploaded` →
+  `markUploaded(ids:)`; `lastEnactedDetermination`/`lastSuggestedDetermination` carry records.
+- `coreDataPublisher.filteredByEntityName("OrefDetermination")` sinks in `GarminManager`,
+  `AppleWatchManager`, `LiveActivityManager`, `CalendarManager`, `ContactImageManager`, `IOBService`
+  → `OrefDeterminationStore.observeEnacted()` (or a dedicated latest observation). `GarminManager`'s
+  `fetchDeterminations30Min` + `object(with:)` and `LiveActivity DataManager.fetchAndMapDetermination`
+  (reads `cob`/`currentTarget`/`deliverAt`) → store fetches.
+- `BolusCalculationManager`, `AutosensSettingsStateModel`, `StateIntentRequest` (all use
+  `fetchLastDeterminationObjectID`) → `OrefDeterminationStore.fetchLast(...)`.
+- `JSONImporter.importOrefDetermination` + `Determination.store(in:)` → record inserts via the stores
+  (mirror the Carb `makeCarbEntryRecord` seam); update `JSONImporterTests`.
+
+#### Preserve exactly (intentional quirks)
+
+- `Determination.eventualBG` is built via `orefDetermination.eventualBG as? Int` on an
+  `NSDecimalNumber?`, which currently always yields `nil`. **Do not "fix"** — carry the behavior
+  (map to `nil`/the same cast result) to stay in migration scope.
+- `received: orefDetermination.enacted` in the Nightscout `Determination` DTO (the comment notes it's
+  "actually part of NS") — keep the mapping verbatim.
+- `getOrefDeterminationNotYetUploadedToNightscout` builds `Predictions` from the four forecast types
+  via separate fetches — keep the same four-type assembly (now one `fetchHierarchy` + group-by-type,
+  or four `fetchValues`).
+
+#### Cleanup parity / tests
+
+`TrioApp`: `batchDeleteOlderThan(OrefDetermination, deliverAt, 90)` → `OrefDeterminationStore.deleteOlderThan(days: 90)`
+(cascades to forecasts + values); `batchDeleteOlderThan(Forecast, date, 2)` +
+`batchDeleteOlderThan(parent: Forecast, child: ForecastValue, 2)` → `ForecastStore.deleteOlderThan(days: 2)`
+(the single store call cascades to values — the parent/child helper is no longer needed). Rewrite
+`DeterminationStorageTests` against an in-memory pool (the forecast-hierarchy fetch and the
+not-yet-uploaded enacted/suggested splits are the important cases); `TestAssembly` drops the Core Data
+`contextProvider` for `DeterminationStorage`.
+
+#### Open risk
+
+This is the first **cross-process hot-path** entity that extensions read (LiveActivity / widgets /
+Watch via `coreDataPublisher`). GRDB `ValueObservation` across processes needs explicit handling
+(`DatabaseRegionObservation` + Darwin notifications) — verify the LiveActivity/widget read path before
+merging (see the "Cross-process" open item below). Consider landing the in-app path first and the
+extension observations as a follow-up if cross-process observation isn't yet proven.
+
+### ⏳ After the determination family
+
+1. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path. **Planned: see
+   Step 10 above.**
 2. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
-3. `GlucoseStored` (+ `DeletedGlucoseStored`, if deferred) — highest read volume; uses
+3. `GlucoseStored` (+ `DeletedGlucoseStored` 9b, if still deferred) — highest read volume; uses
    `ValueObservation` for the live charts.
 
 ## Cleanup (after all entities migrated & proven)
