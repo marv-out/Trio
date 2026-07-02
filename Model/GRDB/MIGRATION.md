@@ -600,10 +600,181 @@ extension observations as a follow-up if cross-process observation isn't yet pro
 
 </details>
 
+### 🔧 Step 11 — `PumpEventStored` + `BolusStored` + `TempBasalStored` (planned, not yet implemented)
+
+The **dosing path — highest risk of the whole migration.** Every bolus and temp basal the pump
+delivers is recorded here, this table feeds the oref algorithm's `pumphistory` **every loop cycle**,
+and it drives three upload channels (Nightscout / Apple Health / Tidepool) plus IOB/TDD math. A wrong
+migration here can mis-dose. Treat reads/writes as safety-critical and verify on-device dosing +
+IOB + all three uploads before merging.
+
+Relationship shape (inverse of the determination family): `PumpEventStored` is the **parent** with two
+**optional 1:1** children — `bolus` (`BolusStored`) and `tempBasal` (`TempBasalStored`), each with an
+inverse to-one `pumpEvent`. A pump event carries *either* a bolus *or* a temp basal *or* neither
+(suspend/resume/rewind/prime/alarm/siteChange). Mirror Steps 7–10 for the record/store/observation/FK
+patterns; the deltas below are what makes the pump family different. Full call-site map (line-level)
+lives in the PR notes (~24 non-test files).
+
+⚠️ **Uniqueness constraints (must carry over).** The Core Data model declares two uniqueness
+constraints on `PumpEventStored`: `id`, and the composite `(timestamp, type)`. These back the batched
+de-duplication in `storePumpEvents` (which keys on `(timestamp, type)`) and are a race-safe backstop.
+In GRDB they become a **unique index on `id`** and a **composite unique index on `(timestamp, type)`**.
+
+#### Records (`Model/GRDB/PumpEventRecord.swift`)
+
+- `PumpEventRecord` — `id` (**String**, the business UUID-string, unique — *not* a UUID column like
+  the other records), `timestamp` (Date?), `type` (String?, the `EventType` raw value), `note`
+  (String?), and the **three** upload flags `isUploadedToNS` / `isUploadedToHealth` /
+  `isUploadedToTidepool`. **No Decimals** on the parent → a plain `Codable` GRDB record works (like
+  `ContactImageRecord`). `pk` = rowid. `Hashable`/`Identifiable`. **`MutablePersistableRecord`** (the
+  composite insert reads `pk` back to link children — see the Step 8 note).
+- `BolusRecord` — `amount` (**Decimal**, stored as TEXT, lossless — like `TDDRecord`), `isSMB` (Bool),
+  `isExternal` (Bool), and `pumpEventPk: Int64?` foreign key replacing the `pumpEvent` to-one.
+  `ON DELETE CASCADE`. Manual `FetchableRecord`/`MutablePersistableRecord` for the Decimal.
+- `TempBasalRecord` — `duration` (Int16), `rate` (**Decimal**, TEXT), `tempType` (String?), and
+  `pumpEventPk: Int64?` foreign key. `ON DELETE CASCADE`. Manual persistence for the Decimal.
+- ⚠️ **FK direction + cascade.** The FK lives on the **child** (`bolus`/`tempBasal` carry
+  `pumpEventPk`), mirroring `OverrideRunRecord.overridePk`. `ON DELETE CASCADE` (not SET NULL) — a
+  bolus/temp basal has no meaning without its event, and `TrioApp` already batch-deletes the children
+  with the parent. Deleting a `PumpEventRecord` wipes its child.
+- **Composite value type for parent→child reads.** Most consumers read `event.bolus?.amount` /
+  `event.tempBasal?.rate`. Expose a `PumpEventDetails` struct (`event: PumpEventRecord`,
+  `bolus: BolusRecord?`, `tempBasal: TempBasalRecord?`) that the store returns from its joined
+  fetches, so call sites keep the same shape without an `NSManagedObject` graph.
+- **Port the oref-JSON DTO helpers.** `toBolusDTOEnum()` / `toTempBasalDTOEnum()` /
+  `toTempBasalDurationDTOEnum()` / `toPumpSuspendDTO()` / `toPumpResumeDTO()` / `toRewindDTO()` /
+  `toPrimeDTO()` (currently on `PumpEventStored`, in `PumpEvent+helper.swift`) move onto
+  `PumpEventDetails` (they need event + child), exactly like the Carb `Encodable` port in Step 9a.
+  `OpenAPS.loadAndMapPumpEvents` then maps `[PumpEventDetails]` → `[PumpEventDTO]` → JSON. Keep the
+  `EventType`/`TempType` enums and the `PumpEventDTO`/`*DTO` structs where they are (still used).
+
+#### Schema v10 + `PumpEventMigration`
+
+Three tables: `pumpEventStored` (unique index on `id`; composite unique index on `(timestamp, type)`;
+index on `timestamp` and on each of the three `isUploadedTo*` flags; index on `type`), `bolusStored`
+(index on `pumpEventPk`), `tempBasalStored` (index on `pumpEventPk`). Both FKs `ON DELETE CASCADE`.
+Register in `GRDBStack.bootstrap()` after `OrefDeterminationMigration`, gated by
+`grdb.didMigratePumpEvent`. The one-time copy resolves both 1:1 relationships by legacy
+`NSManagedObjectID` → new `pk` (parent first, then children with `pumpEventPk`), exactly as
+`OverrideMigration` did — but the `id` string uniqueness lets a straight copy dedupe naturally.
+
+#### Store API (`PumpEventStore`)
+
+Reads return `PumpEventDetails` (event joined with its bolus/tempBasal, resolved via the FK):
+- `fetchHistory(within: 24h, limit: 288)` — `pumpHistoryLast24h`, newest first (Home insulin chart, History).
+- `fetchForOref(within: 1440min)` + `fetchForOrphanedResumeDetection(within: 48h)` — the oref read
+  path (see below). Return details / lightweight `(pk, type, timestamp)` rows respectively.
+- `fetchRecentTempBasal()` — `recentPumpHistory` (`type == tempBasal AND timestamp >= 20min`, limit 1;
+  `APSManager.fetchCurrentTempBasal`).
+- `fetchLastBolus()` — `lastPumpBolus` (`timestamp >= 20min AND bolus.isExternal == false`, limit 1) —
+  ⚠️ the "not external" filter is on the **child**, so this needs the join.
+- `fetchForStats(...)` — bolus / temp-basal / suspend-resume windows (`pumpHistoryForStats` = 3 months;
+  the Stat setups filter on `pumpEvent.timestamp` and on `(timestamp, type)` for suspend/resume).
+- `fetchNotYetUploaded(channel:)` for the 3 channels (`pumpEventsNotYetUploadedTo{NS,Health,Tidepool}`).
+- `fetchTotalRecentBolusAmount(since:)` — `BolusSafetyValidator` (sum of `bolus.amount` for
+  `type == bolus AND timestamp > date`).
+- Writes/dedup primitives used by `BasePumpHistoryStorage.storePumpEvents` (the dedup + partial-bolus
+  update + external-insulin logic stays in the storage layer, operating on records):
+  `fetchByTimestamps(_:)` (batched dedup), `insert(event:bolus:tempBasal:)` (composite insert in one
+  transaction, links children to the event `pk`), `updateBolusAmount(pk:amount:isSMB:)` (the
+  smaller-value partial-bolus update, which also re-clears the three upload flags).
+- `markUploaded(channel:ids:[String])` — match on the event `id` (all three channels match on `id`).
+- `deleteOlderThan(days: 90)` — cascades to bolus/tempBasal (the parent/child batch-delete helper is gone).
+- Observations: `observeForChart()` (Home insulin chart), `observeLastBolus()`
+  (Home/Treatments last-bolus, AppleWatch active-bolus), `observeNotYetUploadedCount(channel:)`
+  (Nightscout upload trigger), and a shared "changed" signal for the Watch/Garmin sinks.
+
+#### Identity / hot-path (replaces `NSManagedObjectID` passing)
+
+- **oref read path** (`OpenAPS.fetchPumpHistoryObjectIDs` → `parsePumpHistory` → `loadAndMapPumpEvents`
+  + `fetchOrphanedResumes`): the objectID list + `context.object(with:)` materialization → a single
+  `PumpEventStore.fetchForOref` returning `[PumpEventDetails]`. **Preserve the cold-start
+  orphaned-resume filter exactly** (Trio issue #898: an orphaned oldest `resume` drives negative IOB →
+  over-delivery) — key it by `pk` instead of `objectID`. Keep `createSimulatedBolusDTO` and the DTO
+  ordering in `loadAndMapPumpEvents` (bolus → tempBasalDuration → tempBasal → suspend → resume →
+  rewind → prime).
+- `APSManager.fetchCurrentTempBasal` → `fetchRecentTempBasal()` (reads `duration`/`rate` off the record;
+  the delta/`max(0, duration - delta)` math is unchanged).
+- `BasePumpHistoryStorage` deals in records; `storePumpEvents`/`storeExternalInsulinEvent` go through
+  the store's composite insert. `getPumpHistory` / `getPumpHistoryNotYetUploadedTo{NS,Health,Tidepool}`
+  map `[PumpEventDetails]` (the big `NightscoutTreatment` switch in `getPumpHistoryNotYetUploadedToNightscout`
+  is unchanged apart from reading off records; `determineBolusEventType` takes a `PumpEventDetails`).
+
+#### Reactivity / call sites (~24 files)
+
+- `HomeStateModel`: `insulinController` FRC → `observeForChart()` (see `PumpHistorySetup`);
+  `lastBolusController` FRC → `observeLastBolus()`. `insulinFromPersistence`/`tempBasals`/
+  `suspendAndResumeEvents` → `[PumpEventDetails]` (the `$0.tempBasal != nil` / `$0.type ==` filters
+  read off the record); `lastPumpBolus` → `PumpEventDetails?`.
+- `InsulinView` (`insulinData: [PumpEventStored]`) → `[PumpEventDetails]` (`insulin.bolus?.amount`,
+  `insulin.timestamp`).
+- `History`: `HistoryRootView` `@FetchRequest` (`pumpEventStored`) → a `History.StateModel`
+  observation feeding `[PumpEventDetails]`; `HistoryRootView+Treatments` (`filteredPumpEvents`,
+  `treatmentView`) reads off records; `HistoryDeletionTarget.insulin(PumpEventStored)` →
+  `.insulin(PumpEventDetails)` (dedup on `pk`); `HistoryStateModel+Insulin` deletion moves from
+  `NSManagedObjectID` + `existingObject` to `pk` (fetch the record, read `id`/`timestamp`/`bolus.amount`
+  for the remote-service deletes, then `PumpEventStore.delete(pk:)`).
+- `Treatments`: `lastBolusController` FRC → `observeLastBolus()`; `lastPumpBolus` → `PumpEventDetails?`.
+- `Stat` (`BolusStatsSetup`, `TDDSetup`): fetch `BolusStored`/`TempBasalStored`/suspend-resume
+  `PumpEventStored` directly → `PumpEventStore.fetchForStats` returning the joined details (the hourly
+  grouping reads `bolus.pumpEvent?.timestamp` → `details.event.timestamp`, `bolus.amount`, etc.).
+- `Nightscout`: `pumpEventUploadController` FRC → `observeNotYetUploadedCount(.nightscout)` (wire in
+  `wireUploadControllers`, drop the `performFetch`); `updatePumpEventStoredsAsUploaded` →
+  `markUploaded(.nightscout, ids:)`.
+- `HealthKitManager` / `TidepoolManager`: `getPumpHistoryNotYetUploadedTo{Health,Tidepool}` consumers +
+  the direct `PumpEventStored WHERE tempBasal != nil` temp-basal fetches → store fetches;
+  `updateInsulinAsUploaded` → `markUploaded(.health/.tidepool, ids:)`. Preserve HealthKit's
+  predecessor-temp-basal delivered-units math (reads `tempBasal.rate`).
+- `BolusSafetyValidator.fetchTotalRecentBolusAmount` → `PumpEventStore.fetchTotalRecentBolusAmount(since:)`.
+- `AppleWatchManager`: `coreDataPublisher.filteredByEntityName("PumpEventStored")` → `observeLastBolus()`
+  (or the shared changed-signal); `fetchLastBolus` + `getActiveBolusAmount` (`bolus?.amount`) → store fetch.
+- `GarminManager`: the temp-basal fetch feeding `tbrValue` (`tempBasal?.rate`) → store fetch (the
+  determination sink already moved in Step 10).
+- `JSONImporter.importPumpHistory` + `PumpHistoryEvent.store(in:)` → record inserts via the store
+  (mirror the Carb `makeCarbEntryRecord` seam: `importPumpHistory(url:now:in: pool)`), preserving the
+  `combineTempBasalAndDuration` / `checkForInconsistencies` dedup; update `JSONImporterTests`.
+
+#### Preserve exactly (intentional quirks)
+
+- **De-duplication** on `(timestamp, type)` including the **partial-bolus smaller-value update**
+  (a cancelled/partial bolus overwrites the stored amount with the smaller value and re-clears all
+  three upload flags), and the per-batch in-memory dedup map.
+- **Restrict-to-now timestamp clamp** (`event.date > Date() ? Date() : event.date`) for boluses and
+  external insulin.
+- **Cold-start orphaned-resume filter** in the oref path (issue #898).
+- **`lastPumpBolus` excludes external insulin** (`bolus.isExternal == false`).
+- **Upload-flag matching key:** all three channels match on the event `id` (String). HealthKit and
+  Tidepool re-fetch temp-basal events (`tempBasal != nil`, last 24h) to compute delivered units.
+
+#### Cleanup parity / tests
+
+`TrioApp`: `batchDeleteOlderThan(PumpEventStored, timestamp, 90)` +
+`batchDeleteOlderThan(parent: PumpEventStored, child: BolusStored, 90)` +
+`(parent: PumpEventStored, child: TempBasalStored, 90)` → a single
+`PumpEventStore.deleteOlderThan(days: 90)` (cascades to both children). Rewrite `PumpHistoryStorageTests`
+(if present) and the pump cases in `JSONImporterTests` against an in-memory pool — the dedup +
+partial-bolus update, the orphaned-resume filter (`OpenAPS.loadAndMapPumpEvents` is already static for
+testing), and the three not-yet-uploaded fetches are the important cases. `TestAssembly` drops the
+Core Data `contextProvider` for `PumpHistoryStorage`.
+
+#### Open risk
+
+- **Dosing safety.** This is the table oref reads to compute IOB and the current temp basal. Verify
+  on-device that boluses/temp basals still record, IOB matches pre-migration, and the oref
+  `pumphistory` JSON is byte-identical for the same events (diff the DTO output). The orphaned-resume
+  edge case (#898) must be re-tested from a cold start.
+- **Cross-process** (same open item as Step 10): Health/Tidepool/Watch upload managers run in-app, but
+  confirm nothing in an extension reads these tables directly.
+- **Observation fan-out (learned from Step 10 field logs).** Independent `ValueObservation`s each
+  re-run their query on every write; the pump table changes on every loop cycle *and* on every pump
+  status callback. Prefer **one shared `.share()`/`.multicast` publisher** for the "pump events
+  changed" signal that the Watch/Garmin/chart sinks subscribe to, rather than N independent
+  observations — and carry the same consolidation into the later `GlucoseStored` step.
+
 ### ⏳ After the determination family
 
 1. ~~`OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.~~ **✅ done (Step 10).**
-2. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
+2. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk. **Planned: see Step 11 above.**
 3. `GlucoseStored` (+ `DeletedGlucoseStored` 9b, if still deferred) — highest read volume; uses
    `ValueObservation` for the live charts.
 
