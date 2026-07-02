@@ -34,9 +34,12 @@ extension BaseNightscoutManager {
     /// out after a successful upload). We rely on the per-pipeline throttle so rapid changes
     /// don't spam Nightscout.
     func wireUploadControllers() {
-        determinationUploadControllerDelegate.onContentChange = { [weak self] in
-            self?.requestUpload(.deviceStatus)
-        }
+        // Determinations live in GRDB: a ValueObservation fires when the not-yet-uploaded set
+        // changes, replacing the former NSFetchedResultsController.
+        determinationUploadObservationCancellable = OrefDeterminationStore.observeNotYetUploadedCount()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                self?.requestUpload(.deviceStatus)
+            })
         // Overrides + runs live in GRDB: a ValueObservation fires when the not-yet-uploaded set
         // changes, replacing the former NSFetchedResultsControllers.
         overrideUploadObservationCancellable = OverrideStore.observeNotYetUploadedCount()
@@ -73,7 +76,6 @@ extension BaseNightscoutManager {
         // performFetch must run on the viewContext's queue (main).
         Task { @MainActor in
             do {
-                try self.determinationUploadController.performFetch()
                 try self.pumpEventUploadController.performFetch()
                 try self.glucoseUploadController.performFetch()
             } catch {

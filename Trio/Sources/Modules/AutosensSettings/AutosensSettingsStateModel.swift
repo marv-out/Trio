@@ -12,9 +12,7 @@ extension AutosensSettings {
 
         private(set) var autosensISF: Decimal?
         private(set) var autosensRatio: Decimal = 1
-        @Published var determinationsFromPersistence: [OrefDetermination] = []
-
-        let viewContext = CoreDataStack.shared.persistentContainer.viewContext
+        @Published var determinationsFromPersistence: [OrefDeterminationRecord] = []
 
         @Published var autosensMax: Decimal = 1.2
         @Published var autosensMin: Decimal = 0.7
@@ -42,30 +40,19 @@ extension AutosensSettings {
         private func setupDeterminationsArray() {
             Task {
                 do {
-                    let ids = try await determinationStorage.fetchLastDeterminationObjectID(
-                        predicate: NSPredicate.enactedDetermination
+                    let determination = try await determinationStorage.fetchLastDetermination(
+                        within: 30,
+                        enactedOnly: true
                     )
-                    await updateDeterminationsArray(with: ids)
+                    await MainActor.run {
+                        determinationsFromPersistence = determination.map { [$0] } ?? []
+                    }
                 } catch {
                     debug(
                         .default,
-                        "\(DebuggingIdentifiers.failed) Error fetching determination IDs: \(error)"
+                        "\(DebuggingIdentifiers.failed) Error fetching last determination: \(error)"
                     )
                 }
-            }
-        }
-
-        @MainActor private func updateDeterminationsArray(with IDs: [NSManagedObjectID]) {
-            do {
-                let objects = try IDs.compactMap { id in
-                    try viewContext.existingObject(with: id) as? OrefDetermination
-                }
-                determinationsFromPersistence = objects
-
-            } catch {
-                debugPrint(
-                    "Home State: \(#function) \(DebuggingIdentifiers.failed) error while updating the glucose array: \(error)"
-                )
             }
         }
     }

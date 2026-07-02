@@ -43,19 +43,19 @@ struct MainChartView: View {
         return state.glucoseFromPersistence.first { $0.date.map(range.contains) ?? false }
     }
 
-    private func findDetermination(in range: ClosedRange<Date>) -> OrefDetermination? {
+    private func findDetermination(in range: ClosedRange<Date>) -> OrefDeterminationRecord? {
         state.enactedAndNonEnactedDeterminations.first {
             $0.deliverAt ?? now >= range.lowerBound && $0.deliverAt ?? now <= range.upperBound
         }
     }
 
-    var selectedCOBValue: OrefDetermination? {
+    var selectedCOBValue: OrefDeterminationRecord? {
         guard let selection = selection else { return nil }
         let range = selection.addingTimeInterval(-150) ... selection.addingTimeInterval(150)
         return findDetermination(in: range)
     }
 
-    var selectedIOBValue: OrefDetermination? {
+    var selectedIOBValue: OrefDeterminationRecord? {
         guard let selection = selection else { return nil }
         let range = selection.addingTimeInterval(-150) ... selection.addingTimeInterval(150)
         return findDetermination(in: range)

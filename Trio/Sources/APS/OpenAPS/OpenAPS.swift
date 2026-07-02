@@ -35,67 +35,47 @@ final class OpenAPS {
         return NSDecimalNumber(decimal: value)
     }
 
-    // Use the helper function for cleaner code
-    func processDetermination(_ determination: Determination, on context: NSManagedObjectContext) async {
-        await context.perform {
-            let newOrefDetermination = OrefDetermination(context: context)
-            newOrefDetermination.id = UUID()
-            newOrefDetermination.insulinSensitivity = self.decimalToNSDecimalNumber(determination.isf)
-            newOrefDetermination.currentTarget = self.decimalToNSDecimalNumber(determination.current_target)
-            newOrefDetermination.eventualBG = determination.eventualBG.map(NSDecimalNumber.init)
-            newOrefDetermination.deliverAt = determination.deliverAt
-            newOrefDetermination.carbRatio = self.decimalToNSDecimalNumber(determination.carbRatio)
-            newOrefDetermination.glucose = self.decimalToNSDecimalNumber(determination.bg)
-            newOrefDetermination.reservoir = self.decimalToNSDecimalNumber(determination.reservoir)
-            newOrefDetermination.insulinReq = self.decimalToNSDecimalNumber(determination.insulinReq)
-            newOrefDetermination.temp = determination.temp?.rawValue ?? "absolute"
-            newOrefDetermination.rate = self.decimalToNSDecimalNumber(determination.rate)
-            newOrefDetermination.reason = determination.reason
-            newOrefDetermination.duration = self.decimalToNSDecimalNumber(determination.duration)
-            newOrefDetermination.iob = self.decimalToNSDecimalNumber(determination.iob)
-            newOrefDetermination.threshold = self.decimalToNSDecimalNumber(determination.threshold)
-            newOrefDetermination.minDelta = self.decimalToNSDecimalNumber(determination.minDelta)
-            newOrefDetermination.sensitivityRatio = self.decimalToNSDecimalNumber(determination.sensitivityRatio)
-            newOrefDetermination.expectedDelta = self.decimalToNSDecimalNumber(determination.expectedDelta)
-            newOrefDetermination.cob = Int16(Int(determination.cob ?? 0))
-            newOrefDetermination.smbToDeliver = determination.units.map { NSDecimalNumber(decimal: $0) }
-            newOrefDetermination.carbsRequired = Int16(Int(determination.carbsReq ?? 0))
-            newOrefDetermination.isUploadedToNS = false
+    // Hot-path write: persist the determination + its forecast tree to GRDB in one transaction.
+    func processDetermination(_ determination: Determination) async {
+        // `timestamp` is intentionally left nil here — like the former Core Data path, it is only
+        // stamped later by `APSManager.reportEnacted` once the determination is actually enacted.
+        let record = OrefDeterminationRecord(
+            id: UUID(),
+            deliverAt: determination.deliverAt,
+            isUploadedToNS: false,
+            cob: Int16(Int(determination.cob ?? 0)),
+            carbsRequired: Int16(Int(determination.carbsReq ?? 0)),
+            reason: determination.reason,
+            temp: determination.temp?.rawValue ?? "absolute",
+            carbRatio: determination.carbRatio,
+            currentTarget: determination.current_target,
+            duration: determination.duration,
+            eventualBG: determination.eventualBG.map { Decimal($0) },
+            expectedDelta: determination.expectedDelta,
+            glucose: determination.bg,
+            insulinReq: determination.insulinReq,
+            insulinSensitivity: determination.isf,
+            iob: determination.iob,
+            minDelta: determination.minDelta,
+            rate: determination.rate,
+            reservoir: determination.reservoir,
+            sensitivityRatio: determination.sensitivityRatio,
+            smbToDeliver: determination.units,
+            threshold: determination.threshold
+        )
 
-            if let predictions = determination.predictions {
-                ["iob": predictions.iob, "zt": predictions.zt, "cob": predictions.cob, "uam": predictions.uam]
-                    .forEach { type, values in
-                        if let values = values {
-                            let forecast = Forecast(context: context)
-                            forecast.id = UUID()
-                            forecast.type = type
-                            forecast.date = Date()
-                            forecast.orefDetermination = newOrefDetermination
+        let now = Date()
+        let forecasts: [OrefDeterminationStore.ForecastInput] = determination.predictions.map { predictions in
+            ["iob": predictions.iob, "zt": predictions.zt, "cob": predictions.cob, "uam": predictions.uam]
+                .compactMap { type, values in
+                    values.map { OrefDeterminationStore.ForecastInput(type: type, date: now, values: $0) }
+                }
+        } ?? []
 
-                            for (index, value) in values.enumerated() {
-                                let forecastValue = ForecastValue(context: context)
-                                forecastValue.index = Int32(index)
-                                forecastValue.value = Int32(value)
-                                forecast.addToForecastValues(forecastValue)
-                            }
-                            newOrefDetermination.addToForecasts(forecast)
-                        }
-                    }
-            }
-        }
-
-        // First save the current Determination to Core Data
-        await attemptToSaveContext(on: context)
-    }
-
-    func attemptToSaveContext(on context: NSManagedObjectContext) async {
-        await context.perform {
-            do {
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch {
-                debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save Determination to Core Data")
-            }
+        do {
+            try await OrefDeterminationStore.store(record, forecasts: forecasts)
+        } catch {
+            debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save Determination to GRDB: \(error)")
         }
     }
 
@@ -497,8 +477,8 @@ final class OpenAPS {
             determination.timestamp = deliverAt
 
             if !simulation {
-                // save to core data asynchronously
-                await processDetermination(determination, on: context)
+                // save the determination + its forecasts to GRDB asynchronously
+                await processDetermination(determination)
             }
 
             return determination
@@ -1133,35 +1113,19 @@ final class OpenAPS {
         return (try? String(contentsOf: url)) ?? ""
     }
 
+    /// The bolus-preview path: persists *orphan* forecasts (no determination) to GRDB.
     func processAndSave(forecastData: [String: [Int]]) {
         let currentDate = Date()
-        let context = newContext("processAndSave")
-
-        context.perform {
-            for (type, values) in forecastData {
-                self.createForecast(type: type, values: values, date: currentDate, context: context)
-            }
-
-            do {
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch {
-                print(error.localizedDescription)
-            }
+        let forecasts = forecastData.map { type, values in
+            OrefDeterminationStore.ForecastInput(type: type, date: currentDate, values: values)
         }
-    }
 
-    func createForecast(type: String, values: [Int], date: Date, context: NSManagedObjectContext) {
-        let forecast = Forecast(context: context)
-        forecast.id = UUID()
-        forecast.date = date
-        forecast.type = type
-
-        for (index, value) in values.enumerated() {
-            let forecastValue = ForecastValue(context: context)
-            forecastValue.value = Int32(value)
-            forecastValue.index = Int32(index)
-            forecastValue.forecast = forecast
+        Task {
+            do {
+                try await ForecastStore.storeOrphan(forecasts: forecasts)
+            } catch {
+                debugPrint("\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save orphan forecasts: \(error)")
+            }
         }
     }
 }

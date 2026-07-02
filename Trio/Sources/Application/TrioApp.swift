@@ -458,19 +458,15 @@ extension Notification.Name {
             days: 90,
             relationshipKey: "pumpEvent"
         )
-        async let determinationDeletion: () = coreDataStack
-            .batchDeleteOlderThan(OrefDetermination.self, dateKey: "deliverAt", days: 90)
+        // Determinations now live in GRDB; the 90-day prune cascades to their forecasts and
+        // (transitively) their forecast values via the `ON DELETE CASCADE` foreign keys.
+        async let determinationDeletion: () = OrefDeterminationStore.deleteOlderThan(days: 90)
         async let batteryDeletion: () = BatteryStore.deleteOlderThan(days: 90)
         // Carbs (+ FPU equivalents) now live in GRDB.
         async let carbEntryDeletion: () = CarbEntryStore.deleteOlderThan(days: 90)
-        async let forecastDeletion: () = coreDataStack.batchDeleteOlderThan(Forecast.self, dateKey: "date", days: 2)
-        async let forecastValueDeletion: () = coreDataStack.batchDeleteOlderThan(
-            parentType: Forecast.self,
-            childType: ForecastValue.self,
-            dateKey: "date",
-            days: 2,
-            relationshipKey: "forecast"
-        )
+        // Forecasts live in GRDB; the 2-day prune cascades to their values (the old parent/child
+        // `ForecastValue` batch delete is no longer needed). Orphan (bolus-preview) forecasts prune too.
+        async let forecastDeletion: () = ForecastStore.deleteOlderThan(days: 2)
         // Overrides + their runs now live in GRDB. Presets are preserved (mirrors the former
         // `isPresetKey: "isPreset"`); runs older than 3 days are pruned.
         async let overrideDeletion: () = OverrideStore.deleteOlderThan(days: 3)
@@ -489,7 +485,6 @@ extension Notification.Name {
         try await batteryDeletion
         try await carbEntryDeletion
         try await forecastDeletion
-        try await forecastValueDeletion
         try await overrideDeletion
         try await overrideRunDeletion
         try await tempTargetDeletion

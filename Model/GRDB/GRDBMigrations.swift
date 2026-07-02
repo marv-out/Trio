@@ -236,6 +236,98 @@ extension GRDBStack {
             )
         }
 
+        // v9 — OrefDetermination + Forecast + ForecastValue (the dosing decision + its forecast
+        // curves). The first hot-path family and the deepest relationship graph: a two-level tree
+        // `orefDeterminationStored —(1:n)→ forecastStored —(1:n)→ forecastValueStored`. The two
+        // Core Data to-one relationships become the `orefDeterminationPk`/`forecastPk` foreign keys.
+        // Both FKs are `ON DELETE CASCADE` — Core Data declared them Nullify, but the actual
+        // lifecycle deletes children with the parent (the `TrioApp` batch deletes + conceptual
+        // ownership), so cascade is the correct GRDB equivalent and removes the parent/child
+        // batch-delete helper. The 20 determination Decimals are stored as TEXT (lossless), like
+        // `TDDRecord`/`OverrideRecord`. The forecast FK is **nullable**: the bolus-preview path
+        // creates orphan forecasts (no determination).
+        migrator.registerMigration("v9_orefDetermination") { db in
+            try db.create(table: "orefDeterminationStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID (string form)
+                t.column("deliverAt", .datetime)
+                t.column("timestamp", .datetime)
+                t.column("timestampEnacted", .datetime)
+                t.column("enacted", .boolean).notNull().defaults(to: false)
+                t.column("received", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToNS", .boolean).notNull().defaults(to: false)
+                t.column("cob", .integer).notNull().defaults(to: 0)
+                t.column("carbsRequired", .integer).notNull().defaults(to: 0)
+                t.column("reason", .text)
+                t.column("temp", .text)
+                t.column("bolus", .text) // Decimal as string
+                t.column("carbRatio", .text)
+                t.column("currentTarget", .text)
+                t.column("duration", .text)
+                t.column("eventualBG", .text)
+                t.column("expectedDelta", .text)
+                t.column("glucose", .text)
+                t.column("insulinForManualBolus", .text)
+                t.column("insulinReq", .text)
+                t.column("insulinSensitivity", .text)
+                t.column("iob", .text)
+                t.column("manualBolusErrorString", .text)
+                t.column("minDelta", .text)
+                t.column("rate", .text)
+                t.column("reservoir", .text)
+                t.column("scheduledBasal", .text)
+                t.column("sensitivityRatio", .text)
+                t.column("smbToDeliver", .text)
+                t.column("tempBasal", .text)
+                t.column("threshold", .text)
+            }
+            // Active/recent/chart queries filter/sort on deliverAt+timestamp; enacted and
+            // isUploadedToNS drive the enacted-latest and Nightscout-upload fetches.
+            try db.create(index: "orefDeterminationStored_on_deliverAt", on: "orefDeterminationStored", columns: ["deliverAt"])
+            try db.create(index: "orefDeterminationStored_on_timestamp", on: "orefDeterminationStored", columns: ["timestamp"])
+            try db.create(index: "orefDeterminationStored_on_enacted", on: "orefDeterminationStored", columns: ["enacted"])
+            try db.create(
+                index: "orefDeterminationStored_on_isUploadedToNS",
+                on: "orefDeterminationStored",
+                columns: ["isUploadedToNS"]
+            )
+
+            try db.create(table: "forecastStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // original Core Data UUID (string form)
+                t.column("type", .text) // iob / zt / cob / uam
+                t.column("date", .datetime)
+                // Replaces the Core Data `orefDetermination` to-one relationship. Nullable: the
+                // bolus-preview path creates orphan forecasts. CASCADE so forecasts die with their
+                // determination.
+                t.column("orefDeterminationPk", .integer)
+                    .references("orefDeterminationStored", onDelete: .cascade)
+            }
+            try db.create(index: "forecastStored_on_date", on: "forecastStored", columns: ["date"])
+            try db.create(index: "forecastStored_on_type", on: "forecastStored", columns: ["type"])
+            try db.create(
+                index: "forecastStored_on_orefDeterminationPk",
+                on: "forecastStored",
+                columns: ["orefDeterminationPk"]
+            )
+
+            try db.create(table: "forecastValueStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("index", .integer).notNull().defaults(to: 0)
+                t.column("value", .integer).notNull().defaults(to: 0)
+                // Replaces the Core Data `forecast` to-one relationship. CASCADE so values die with
+                // their forecast (and transitively with their determination).
+                t.column("forecastPk", .integer)
+                    .references("forecastStored", onDelete: .cascade)
+            }
+            try db.create(
+                index: "forecastValueStored_on_forecastPk",
+                on: "forecastValueStored",
+                columns: ["forecastPk"]
+            )
+            try db.create(index: "forecastValueStored_on_index", on: "forecastValueStored", columns: ["index"])
+        }
+
         return migrator
     }
 }

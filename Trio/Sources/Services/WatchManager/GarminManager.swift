@@ -273,13 +273,15 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
     /// Sets up handlers for OrefDetermination and GlucoseStored entity changes in CoreData.
     /// When these change, we re-compute the Garmin watch state and send updates to the watch.
     private func registerHandlers() {
-        // OrefDetermination changes - debounce at CoreData level
-        coreDataPublisher?
-            .filteredByEntityName("OrefDetermination")
+        // OrefDetermination changes - GRDB observation replaces the Core Data sink (debounced)
+        OrefDeterminationStore.observeLatest()
             .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.triggerWatchStateUpdate(triggeredBy: "Determination")
-            }
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] _ in
+                    self?.triggerWatchStateUpdate(triggeredBy: "Determination")
+                }
+            )
             .store(in: &subscriptions)
 
         // GlucoseStored changes - catches single glucose inserts that updatePublisher misses
@@ -502,24 +504,9 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
     /// Fetches all determinations from the last 30 minutes (no fetch limit).
     /// Returns them sorted newest first, allowing us to find both enacted and suggested determinations.
     /// - Returns: An array of `NSManagedObjectID`s for all determinations in the 30-minute window.
-    private func fetchDeterminations30Min() async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchDeterminations30Min"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: OrefDetermination.self,
-            onContext: context,
-            predicate: NSPredicate.predicateFor30MinAgoForDetermination,
-            key: "deliverAt",
-            ascending: false,
-            fetchLimit: 0 // No limit - get all determinations in 30min window
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [OrefDetermination] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-            return fetchedResults.map(\.objectID)
-        }
+    private func fetchDeterminations30Min() async throws -> [OrefDeterminationRecord] {
+        // All determinations in the last 30 minutes (enacted and suggested), newest first.
+        try await OrefDeterminationStore.fetchRecent(within: 30)
     }
 
     // MARK: - Watch State Setup
@@ -543,8 +530,8 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
         let glucoseIds = try await fetchGlucose(limit: glucoseLimit)
 
         // Fetch all determinations from last 30 minutes (no limit)
-        // This ensures we get both enacted and suggested determinations
-        let allDeterminationIds = try await fetchDeterminations30Min()
+        // This ensures we get both enacted and suggested determinations (GRDB value types).
+        let allDeterminationObjects = try await fetchDeterminations30Min()
 
         let tempBasalIds = try await fetchTempBasals()
 
@@ -564,9 +551,9 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
         context.name = "setupGarminWatchState"
 
         let watchStates = await context.perform {
-            // Fetch Core Data objects inside perform block
+            // Fetch Core Data objects inside perform block (determinations are GRDB value types,
+            // captured from above).
             let glucoseObjects = glucoseIds.compactMap { context.object(with: $0) as? GlucoseStored }
-            let allDeterminationObjects = allDeterminationIds.compactMap { context.object(with: $0) as? OrefDetermination }
             let tempBasalObjects = tempBasalIds.compactMap { context.object(with: $0) as? PumpEventStored }
             var watchStates: [GarminWatchState] = []
 
@@ -591,15 +578,15 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
                 cobValue = Double(latestDetermination.cob)
 
                 if let ratio = latestDetermination.sensitivityRatio {
-                    sensRatioValue = Double(truncating: ratio)
+                    sensRatioValue = NSDecimalNumber(decimal: ratio).doubleValue
                 }
 
                 if let isf = latestDetermination.insulinSensitivity {
-                    isfValue = Int16(truncating: isf)
+                    isfValue = Int16(truncating: NSDecimalNumber(decimal: isf))
                 }
 
                 if let eventualBG = latestDetermination.eventualBG {
-                    eventualBGValue = Int16(truncating: eventualBG)
+                    eventualBGValue = Int16(truncating: NSDecimalNumber(decimal: eventualBG))
                 }
             }
 

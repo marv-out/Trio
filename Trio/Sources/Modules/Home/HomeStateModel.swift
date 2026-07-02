@@ -89,8 +89,8 @@ extension Home {
         var latestTwoGlucoseValues: [GlucoseStored] = []
         var carbsFromPersistence: [CarbEntryRecord] = []
         var fpusFromPersistence: [CarbEntryRecord] = []
-        var determinationsFromPersistence: [OrefDetermination] = []
-        var enactedAndNonEnactedDeterminations: [OrefDetermination] = []
+        var determinationsFromPersistence: [OrefDeterminationRecord] = []
+        var enactedAndNonEnactedDeterminations: [OrefDeterminationRecord] = []
         var fetchedTDDs: [TDD] = []
         var insulinFromPersistence: [PumpEventStored] = []
         var tempBasals: [PumpEventStored] = []
@@ -102,7 +102,7 @@ extension Home {
         var tempTargetStored: [TempTargetRecord] = []
         var tempTargetRunStored: [TempTargetRunRecord] = []
         var isOverrideCancelled: Bool = false
-        var preprocessedData: [(id: UUID, forecast: Forecast, forecastValue: ForecastValue)] = []
+        var preprocessedData: [(id: UUID, forecast: ForecastRecord, forecastValue: ForecastValueRecord)] = []
         var pumpStatusHighlightMessage: String?
         var pumpStatusBadgeImage: UIImage?
         var pumpStatusBadgeColor: Color?
@@ -160,38 +160,10 @@ extension Home {
         @ObservationIgnored var carbsObservationCancellable: AnyCancellable?
         @ObservationIgnored var fpusObservationCancellable: AnyCancellable?
 
-        @ObservationIgnored let enactedDeterminationControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var enactedDeterminationController: NSFetchedResultsController<OrefDetermination> =
-            {
-                let request = NSFetchRequest<OrefDetermination>(entityName: "OrefDetermination")
-                request.sortDescriptors = [NSSortDescriptor(keyPath: \OrefDetermination.deliverAt, ascending: false)]
-                request.predicate = NSPredicate.enactedDetermination
-                request.fetchLimit = 1
-                let controller = NSFetchedResultsController(
-                    fetchRequest: request,
-                    managedObjectContext: viewContext,
-                    sectionNameKeyPath: nil,
-                    cacheName: nil
-                )
-                controller.delegate = enactedDeterminationControllerDelegate
-                return controller
-            }()
-
-        @ObservationIgnored let determinationControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var determinationController: NSFetchedResultsController<OrefDetermination> = {
-            let request = NSFetchRequest<OrefDetermination>(entityName: "OrefDetermination")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \OrefDetermination.deliverAt, ascending: false)]
-            request.predicate = NSPredicate.determinationsForCobIobCharts
-            request.fetchBatchSize = 50
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = determinationControllerDelegate
-            return controller
-        }()
+        // Determinations live in GRDB: ValueObservations replace the former
+        // `enactedDeterminationController` / `determinationController` NSFetchedResultsControllers.
+        @ObservationIgnored var enactedDeterminationObservationCancellable: AnyCancellable?
+        @ObservationIgnored var determinationObservationCancellable: AnyCancellable?
 
         @ObservationIgnored let insulinControllerDelegate = FetchedResultsControllerDelegate()
         @ObservationIgnored private(set) lazy var insulinController: NSFetchedResultsController<PumpEventStored> = {

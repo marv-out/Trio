@@ -24,7 +24,7 @@ final class BaseCalendarManager: CalendarManager, Injectable {
     private let queue = DispatchQueue(label: "BaseCalendarManager.queue", qos: .background)
     private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
     private var subscriptions = Set<AnyCancellable>()
-    private var previousDeterminationId: NSManagedObjectID?
+    private var previousDeterminationId: Int64?
 
     private var glucoseFormatter: NumberFormatter {
         let formatter = NumberFormatter()
@@ -175,26 +175,8 @@ final class BaseCalendarManager: CalendarManager, Injectable {
         EKEventStore().calendars(for: .event).map(\.title)
     }
 
-    private func getLastDetermination() async throws -> NSManagedObjectID? {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "getLastDetermination"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: OrefDetermination.self,
-            onContext: context,
-            predicate: NSPredicate.predicateFor30MinAgoForDetermination,
-            key: "timestamp",
-            ascending: false,
-            fetchLimit: 1,
-            propertiesToFetch: ["timestamp", "cob", "iob", "objectID"]
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [[String: Any]] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.first?["objectID"] as? NSManagedObjectID
-        }
+    private func getLastDetermination() async throws -> OrefDeterminationRecord? {
+        try await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: false)
     }
 
     private func fetchGlucose() async throws -> [NSManagedObjectID] {
@@ -221,19 +203,16 @@ final class BaseCalendarManager: CalendarManager, Injectable {
     @MainActor func createEvent() async {
         do {
             guard settingsManager.settings.useCalendar, let calendar = currentCalendar,
-                  let determinationId = try await getLastDetermination() else { return }
+                  let determinationObject = try await getLastDetermination() else { return }
 
-            // Ignore the update if the determinationId is the same as it was at last update
-            if determinationId == previousDeterminationId {
+            // Ignore the update if the determination is the same as it was at last update
+            if let pk = determinationObject.pk, pk == previousDeterminationId {
                 return
             }
 
             let glucoseIds = try await fetchGlucose()
 
             deleteAllEvents(in: calendar)
-
-            guard let determinationObject = try viewContext.existingObject(with: determinationId) as? OrefDetermination
-            else { return }
 
             let glucoseObjects = try glucoseIds.compactMap { id in
                 try viewContext.existingObject(with: id) as? GlucoseStored
@@ -307,7 +286,7 @@ final class BaseCalendarManager: CalendarManager, Injectable {
 
             try eventStore.save(event, span: .thisEvent)
 
-            previousDeterminationId = determinationId
+            previousDeterminationId = determinationObject.pk
 
         } catch {
             debugPrint(

@@ -23,7 +23,7 @@ extension MainChartView {
             }
 
             if let selectedIOBValue {
-                let rawAmount = selectedIOBValue.iob?.doubleValue ?? 0
+                let rawAmount = selectedIOBValue.iob.map { NSDecimalNumber(decimal: $0).doubleValue } ?? 0
                 let amount: Double = rawAmount > 0 ? rawAmount * 8 : rawAmount * 9
 
                 drawSelectedInnerPoint(
@@ -127,7 +127,7 @@ extension MainChartView {
 
             // MARK: - IOB line and area mark
 
-            let rawAmount = item.iob?.doubleValue ?? 0
+            let rawAmount = item.iob.map { NSDecimalNumber(decimal: $0).doubleValue } ?? 0
             let amountIOB: Double = scaleIobAmountForChart(rawAmount)
 
             AreaMark(x: .value("Time", date), y: .value("Amount", amountIOB))

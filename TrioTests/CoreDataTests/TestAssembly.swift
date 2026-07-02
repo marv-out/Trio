@@ -16,9 +16,11 @@ class TestAssembly: Assembly {
             BasePumpHistoryStorage(resolver: r, contextProvider: { self.testContext })
         }.inObjectScope(.container)
 
-        // Override DeterminationStorage registration for tests
+        // Override DeterminationStorage registration for tests. Determinations now live in GRDB, so
+        // this no longer needs a Core Data context; the GRDB round-trip is tested directly in
+        // DeterminationStorageTests against an in-memory pool.
         container.register(DeterminationStorage.self) { r in
-            BaseDeterminationStorage(resolver: r, contextProvider: { self.testContext })
+            BaseDeterminationStorage(resolver: r)
         }.inObjectScope(.container)
 
         // Override CarbsStorage registration for tests. Carbs now live in GRDB, so this no longer

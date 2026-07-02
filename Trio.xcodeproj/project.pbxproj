@@ -430,6 +430,8 @@
 		BD00EFD22FF19EFF005D482C /* OverrideMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00EFCF2FF19EFF005D482C /* OverrideMigration.swift */; };
 		BD00F0522FF3C426005D482C /* CarbEntryMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0502FF3C426005D482C /* CarbEntryMigration.swift */; };
 		BD00F0532FF3C426005D482C /* CarbEntryRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0512FF3C426005D482C /* CarbEntryRecord.swift */; };
+		BD00F0562FF6F937005D482C /* OrefDeterminationMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0542FF6F937005D482C /* OrefDeterminationMigration.swift */; };
+		BD00F0572FF6F937005D482C /* OrefDeterminationRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0552FF6F937005D482C /* OrefDeterminationRecord.swift */; };
 		BD00F8A12FF1B100005D482C /* TempTargetRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */; };
 		BD00F8A32FF1B100005D482C /* TempTargetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */; };
 		BD04ECCE2D29952A008C5FEB /* BolusProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */; };
@@ -1390,6 +1392,8 @@
 		BD00EFD02FF19EFF005D482C /* OverrideRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverrideRecord.swift; sourceTree = "<group>"; };
 		BD00F0502FF3C426005D482C /* CarbEntryMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarbEntryMigration.swift; sourceTree = "<group>"; };
 		BD00F0512FF3C426005D482C /* CarbEntryRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarbEntryRecord.swift; sourceTree = "<group>"; };
+		BD00F0542FF6F937005D482C /* OrefDeterminationMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefDeterminationMigration.swift; sourceTree = "<group>"; };
+		BD00F0552FF6F937005D482C /* OrefDeterminationRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefDeterminationRecord.swift; sourceTree = "<group>"; };
 		BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetRecord.swift; sourceTree = "<group>"; };
 		BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetMigration.swift; sourceTree = "<group>"; };
 		BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressOverlay.swift; sourceTree = "<group>"; };
@@ -3278,6 +3282,8 @@
 		BD00F0010000A000005D482C /* GRDB */ = {
 			isa = PBXGroup;
 			children = (
+				BD00F0542FF6F937005D482C /* OrefDeterminationMigration.swift */,
+				BD00F0552FF6F937005D482C /* OrefDeterminationRecord.swift */,
 				BD00F0502FF3C426005D482C /* CarbEntryMigration.swift */,
 				BD00F0512FF3C426005D482C /* CarbEntryRecord.swift */,
 				BD00EE1C2FF14764005D482C /* GRDBStack.swift */,
@@ -4886,6 +4892,8 @@
 				3B5CD29A2D4AEA3C00CE213C /* ProfileError.swift in Sources */,
 				3B5CD29B2D4AEA3C00CE213C /* Basal.swift in Sources */,
 				3B5CD29C2D4AEA3C00CE213C /* ProfileGenerator.swift in Sources */,
+				BD00F0562FF6F937005D482C /* OrefDeterminationMigration.swift in Sources */,
+				BD00F0572FF6F937005D482C /* OrefDeterminationRecord.swift in Sources */,
 				3B5CD29D2D4AEA3C00CE213C /* Targets.swift in Sources */,
 				DDA6E2502D22187500C2988C /* ChartLegendView.swift in Sources */,
 				49090A8D2E9FE8D200D0F5DB /* GarminWatchSettings.swift in Sources */,

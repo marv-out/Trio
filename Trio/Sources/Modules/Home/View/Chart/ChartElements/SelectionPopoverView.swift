@@ -4,8 +4,8 @@ import SwiftUI
 
 struct SelectionPopoverView: ChartContent {
     let selectedGlucose: GlucoseStored
-    let selectedIOBValue: OrefDetermination?
-    let selectedCOBValue: OrefDetermination?
+    let selectedIOBValue: OrefDeterminationRecord?
+    let selectedCOBValue: OrefDeterminationRecord?
     let units: GlucoseUnits
     let highGlucose: Decimal
     let lowGlucose: Decimal
@@ -89,7 +89,7 @@ struct SelectionPopoverView: ChartContent {
             if let selectedIOBValue, let iob = selectedIOBValue.iob {
                 HStack {
                     Image(systemName: "syringe.fill").frame(width: 15)
-                    Text(Formatter.decimalFormatterWithTwoFractionDigits.string(from: iob) ?? "")
+                    Text(Formatter.decimalFormatterWithTwoFractionDigits.string(from: iob as NSDecimalNumber) ?? "")
                         .bold()
                         + Text(String(localized: " U", comment: "Insulin unit"))
                 }

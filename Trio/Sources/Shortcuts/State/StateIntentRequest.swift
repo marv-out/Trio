@@ -99,18 +99,11 @@ final class StateIntentRequest: BaseIntentsRequest {
         }
     }
 
-    func getIobAndCob(onContext: NSManagedObjectContext) throws -> (iob: Double, cob: Double) {
-        let results = try CoreDataStack.shared.fetchEntities(
-            ofType: OrefDetermination.self,
-            onContext: onContext,
-            predicate: NSPredicate.enactedDetermination,
-            key: "deliverAt",
-            ascending: false,
-            fetchLimit: 1
-        ) as? [OrefDetermination] ?? []
+    func getIobAndCob() async -> (iob: Double, cob: Double) {
+        let determination = try? await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: true)
 
         let iobAsDouble = Double(truncating: (iobService.currentIOB ?? 0.0) as NSNumber)
-        let cobAsDouble = Double(truncating: (results.first?.cob ?? 0) as NSNumber)
+        let cobAsDouble = Double(determination?.cob ?? 0)
 
         return (iobAsDouble, cobAsDouble)
     }

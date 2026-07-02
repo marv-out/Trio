@@ -278,18 +278,15 @@ class JSONImporter {
     ///   - JSONImporterError.missingGlucoseValueInGlucoseEntry if a glucose entry is missing a value.
     ///   - An error if the file cannot be read or decoded.
     ///   - An error if the CoreData operation fails.
-    func importOrefDetermination(enactedUrl: URL, suggestedUrl: URL, now: Date) async throws {
+    /// `pool == nil` uses the shared GRDB store; tests pass an in-memory pool.
+    func importOrefDetermination(enactedUrl: URL, suggestedUrl: URL, now: Date, in pool: DatabasePool? = nil) async throws {
         let twentyFourHoursAgo = now - 24.hours.timeInterval
         let enactedDetermination: Determination = try readJsonFile(url: enactedUrl)
         let suggestedDetermination: Determination = try readJsonFile(url: suggestedUrl)
-        let existingDates = try await fetchDates(
-            ofType: OrefDetermination.self,
-            predicate: .predicateForDeliverAtBetween(start: twentyFourHoursAgo, end: now),
-            sortKey: "deliverAt",
-            dateKeyPath: \.deliverAt
-        )
+        // Determinations live in GRDB; dedupe against the `deliverAt` dates already stored in the window.
+        let existingDates = try await OrefDeterminationStore.existingDates(from: twentyFourHoursAgo, to: now, pool: pool)
 
-        /// Helper function to check if entries are from within the last 24 hours that do not yet exist in Core Data
+        /// Helper function to check if entries are from within the last 24 hours that do not yet exist in GRDB
         func checkDeterminationDate(_ date: Date) -> Bool {
             date >= twentyFourHoursAgo && date <= now && !existingDates.contains(date)
         }
@@ -307,26 +304,16 @@ class JSONImporter {
         try enactedDetermination.checkForRequiredFields()
         try suggestedDetermination.checkForRequiredFields()
 
-        // Create a background context for batch processing
-        let backgroundContext = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
-        backgroundContext.parent = context
-
-        try await backgroundContext.perform {
-            /// We know both determination entries are from within last 24 hrs via `checkDeterminationDate()` in the earlier `guard` clause
-            /// If their `deliverAt` does not match, and if `suggestedDeliverAt` is newer, it is worth storing them both, as that represents
-            /// a more recent algorithm run that did not cause a dosing enactment, e.g., a carb entry or a manual bolus.
-            if suggestedDeliverAt > enactedDeliverAt {
-                try suggestedDetermination.store(in: backgroundContext)
-            }
-
-            try enactedDetermination.store(in: backgroundContext)
-
-            try backgroundContext.save()
+        /// We know both determination entries are from within last 24 hrs via `checkDeterminationDate()` in the earlier `guard` clause.
+        /// If their `deliverAt` does not match, and if `suggestedDeliverAt` is newer, it is worth storing them both, as that represents
+        /// a more recent algorithm run that did not cause a dosing enactment, e.g., a carb entry or a manual bolus.
+        if suggestedDeliverAt > enactedDeliverAt {
+            let (record, forecasts) = suggestedDetermination.makeOrefDeterminationRecord()
+            try await OrefDeterminationStore.store(record, forecasts: forecasts, pool: pool)
         }
 
-        try await context.perform {
-            try self.context.save()
-        }
+        let (record, forecasts) = enactedDetermination.makeOrefDeterminationRecord()
+        try await OrefDeterminationStore.store(record, forecasts: forecasts, pool: pool)
     }
 }
 
@@ -642,59 +629,46 @@ extension Determination: Codable {
         }
     }
 
-    /// Helper function to convert `Determination` to `OrefDetermination` while importing JSON glucose entries
-    func store(in context: NSManagedObjectContext) throws {
-        let newOrefDetermination = OrefDetermination(context: context)
-        newOrefDetermination.id = UUID()
-        newOrefDetermination.insulinSensitivity = decimalToNSDecimalNumber(isf)
-        newOrefDetermination.currentTarget = decimalToNSDecimalNumber(current_target)
-        newOrefDetermination.eventualBG = eventualBG.map(NSDecimalNumber.init)
-        newOrefDetermination.deliverAt = deliverAt
-        newOrefDetermination.timestamp = timestamp
-        newOrefDetermination.enacted = received ?? false
-        newOrefDetermination.carbRatio = decimalToNSDecimalNumber(carbRatio)
-        newOrefDetermination.glucose = decimalToNSDecimalNumber(bg)
-        newOrefDetermination.reservoir = decimalToNSDecimalNumber(reservoir)
-        newOrefDetermination.insulinReq = decimalToNSDecimalNumber(insulinReq)
-        newOrefDetermination.temp = temp?.rawValue ?? "absolute"
-        newOrefDetermination.rate = decimalToNSDecimalNumber(rate)
-        newOrefDetermination.reason = reason
-        newOrefDetermination.duration = decimalToNSDecimalNumber(duration)
-        newOrefDetermination.iob = decimalToNSDecimalNumber(iob)
-        newOrefDetermination.threshold = decimalToNSDecimalNumber(threshold)
-        newOrefDetermination.minDelta = decimalToNSDecimalNumber(minDelta)
-        newOrefDetermination.sensitivityRatio = decimalToNSDecimalNumber(sensitivityRatio)
-        newOrefDetermination.expectedDelta = decimalToNSDecimalNumber(expectedDelta)
-        newOrefDetermination.cob = Int16(Int(cob ?? 0))
-        newOrefDetermination.smbToDeliver = units.map { NSDecimalNumber(decimal: $0) }
-        newOrefDetermination.carbsRequired = Int16(Int(carbsReq ?? 0))
-        newOrefDetermination.isUploadedToNS = true
+    /// Helper function to convert a decoded `Determination` into a GRDB `OrefDeterminationRecord`
+    /// (plus its forecast curves) while importing JSON. Imported determinations are marked
+    /// `isUploadedToNS = true` and `enacted = received ?? false`, mirroring the former Core Data path.
+    func makeOrefDeterminationRecord() -> (OrefDeterminationRecord, [OrefDeterminationStore.ForecastInput]) {
+        let record = OrefDeterminationRecord(
+            id: UUID(),
+            deliverAt: deliverAt,
+            timestamp: timestamp,
+            enacted: received ?? false,
+            isUploadedToNS: true,
+            cob: Int16(Int(cob ?? 0)),
+            carbsRequired: Int16(Int(carbsReq ?? 0)),
+            reason: reason,
+            temp: temp?.rawValue ?? "absolute",
+            carbRatio: carbRatio,
+            currentTarget: current_target,
+            duration: duration,
+            eventualBG: eventualBG.map { Decimal($0) },
+            expectedDelta: expectedDelta,
+            glucose: bg,
+            insulinReq: insulinReq,
+            insulinSensitivity: isf,
+            iob: iob,
+            minDelta: minDelta,
+            rate: rate,
+            reservoir: reservoir,
+            sensitivityRatio: sensitivityRatio,
+            smbToDeliver: units,
+            threshold: threshold
+        )
 
-        if let predictions = predictions {
+        let now = Date()
+        let forecasts: [OrefDeterminationStore.ForecastInput] = predictions.map { predictions in
             ["iob": predictions.iob, "zt": predictions.zt, "cob": predictions.cob, "uam": predictions.uam]
-                .forEach { type, values in
-                    if let values = values {
-                        let forecast = Forecast(context: context)
-                        forecast.id = UUID()
-                        forecast.type = type
-                        forecast.date = Date()
-                        forecast.orefDetermination = newOrefDetermination
-
-                        for (index, value) in values.enumerated() {
-                            let forecastValue = ForecastValue(context: context)
-                            forecastValue.index = Int32(index)
-                            forecastValue.value = Int32(value)
-                            forecast.addToForecastValues(forecastValue)
-                        }
-                        newOrefDetermination.addToForecasts(forecast)
-                    }
+                .compactMap { type, values in
+                    values.map { OrefDeterminationStore.ForecastInput(type: type, date: now, values: $0) }
                 }
-        }
-    }
+        } ?? []
 
-    func decimalToNSDecimalNumber(_ value: Decimal?) -> NSDecimalNumber? {
-        guard let value = value else { return nil }
-        return NSDecimalNumber(decimal: value)
+        return (record, forecasts)
     }
 }
 

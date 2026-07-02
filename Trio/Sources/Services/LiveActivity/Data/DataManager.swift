@@ -30,38 +30,20 @@ extension LiveActivityManager {
 
     // TODO: extract logic or at least rename function appropiately
     func fetchAndMapDetermination() async throws -> DeterminationData? {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchAndMapDetermination"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: OrefDetermination.self,
-            onContext: context,
-            predicate: NSPredicate.predicateFor30MinAgoForDetermination,
-            key: "deliverAt",
-            ascending: false,
-            fetchLimit: 1,
-            propertiesToFetch: ["cob", "currentTarget", "deliverAt"]
-        )
+        // Determination now lives in GRDB (value type — no Core Data perform block).
+        guard let determination = try await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: false) else {
+            return nil
+        }
 
-        // TDD now lives in GRDB — fetch before the Core Data perform block.
         let latestTDD = try await TDDStore.mostRecent(since: Date.halfHourAgo)
         let tddValue = latestTDD?.total ?? 0
 
-        return try await context.perform {
-            guard let determinationResults = results as? [[String: Any]] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            guard let determination = determinationResults.first else {
-                return nil
-            }
-
-            return DeterminationData(
-                cob: (determination["cob"] as? Int) ?? 0,
-                tdd: tddValue,
-                target: (determination["currentTarget"] as? NSDecimalNumber)?.decimalValue ?? 0,
-                date: determination["deliverAt"] as? Date ?? nil
-            )
-        }
+        return DeterminationData(
+            cob: Int(determination.cob),
+            tdd: tddValue,
+            target: determination.currentTarget ?? 0,
+            date: determination.deliverAt
+        )
     }
 
     func fetchAndMapTempTarget() async throws -> TempTargetData? {

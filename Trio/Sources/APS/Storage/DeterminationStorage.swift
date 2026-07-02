@@ -1,236 +1,89 @@
 import Combine
-import CoreData
 import Foundation
+import GRDB
 import Swinject
 
 protocol DeterminationStorage {
-    func fetchLastDeterminationObjectID(predicate: NSPredicate) async throws -> [NSManagedObjectID]
-    func getForecastIDs(for determinationID: NSManagedObjectID, in context: NSManagedObjectContext) async -> [NSManagedObjectID]
-    func getForecastValueIDs(for forecastID: NSManagedObjectID, in context: NSManagedObjectContext) async -> [NSManagedObjectID]
-    func fetchForecastObjects(
-        for data: (id: UUID, forecastID: NSManagedObjectID, forecastValueIDs: [NSManagedObjectID]),
-        in context: NSManagedObjectContext
-    ) async -> (UUID, Forecast?, [ForecastValue])
-    func getOrefDeterminationNotYetUploadedToNightscout(_ determinationIds: [NSManagedObjectID]) async -> Determination?
-    func fetchForecastHierarchy(for determinationID: NSManagedObjectID, in context: NSManagedObjectContext)
-    async throws -> [(id: UUID, forecastID: NSManagedObjectID, forecastValueIDs: [NSManagedObjectID])]
+    /// The most recent determination within a `minutes`-wide window (mirrors the former
+    /// `fetchLastDeterminationObjectID` for both determination predicates). `enactedOnly == true`
+    /// filters `enacted == true AND timestamp >= cutoff`; otherwise `deliverAt >= cutoff`.
+    func fetchLastDetermination(within minutes: Int, enactedOnly: Bool) async throws -> OrefDeterminationRecord?
+    /// All determinations within a `minutes`-wide window, newest first (Garmin's 30-min window).
+    func fetchRecentDeterminations(within minutes: Int) async throws -> [OrefDeterminationRecord]
+    /// The whole forecast tree for a determination (each forecast + its values, values capped at 36).
+    func fetchForecastHierarchy(for determinationPk: Int64) async throws
+        -> [(forecast: ForecastRecord, values: [ForecastValueRecord])]
+    /// Builds the Nightscout `Determination` DTO for a determination record (assembles the four
+    /// forecast curves via the store). Replaces `getOrefDeterminationNotYetUploadedToNightscout`.
+    func buildDeterminationDTO(from record: OrefDeterminationRecord) async -> Determination
 }
 
 final class BaseDeterminationStorage: DeterminationStorage, Injectable {
-    private let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-    private let makeContext: () -> NSManagedObjectContext
-
-    init(resolver: Resolver, contextProvider: (() -> NSManagedObjectContext)? = nil) {
-        makeContext = contextProvider ?? { CoreDataStack.shared.newTaskContext() }
+    init(resolver: Resolver) {
         injectServices(resolver)
     }
 
-    func fetchLastDeterminationObjectID(predicate: NSPredicate) async throws -> [NSManagedObjectID] {
-        let context = makeContext()
-        context.name = "fetchLastDeterminationObjectID"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: OrefDetermination.self,
-            onContext: context,
-            predicate: predicate,
-            key: "deliverAt",
-            ascending: false,
-            fetchLimit: 1
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [OrefDetermination] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-            return fetchedResults.map(\.objectID)
-        }
-    }
-
-    func getForecastIDs(for determinationID: NSManagedObjectID, in context: NSManagedObjectContext) async -> [NSManagedObjectID] {
-        await context.perform {
-            do {
-                guard let determination = try context.existingObject(with: determinationID) as? OrefDetermination,
-                      let forecastSet = determination.forecasts
-                else {
-                    return []
-                }
-                let forecasts = Array(forecastSet)
-                return forecasts.map(\.objectID) as [NSManagedObjectID]
-            } catch {
-                debugPrint(
-                    "Failed \(DebuggingIdentifiers.failed) to fetch Forecast IDs for OrefDetermination with ID \(determinationID): \(error)"
-                )
-                return []
-            }
-        }
-    }
-
-    func getForecastValueIDs(for forecastID: NSManagedObjectID, in context: NSManagedObjectContext) async -> [NSManagedObjectID] {
-        await context.perform {
-            do {
-                guard let forecast = try context.existingObject(with: forecastID) as? Forecast,
-                      let forecastValueSet = forecast.forecastValues
-                else {
-                    return []
-                }
-                let forecastValues = forecastValueSet.sorted(by: { $0.index < $1.index })
-                return forecastValues.map(\.objectID)
-            } catch {
-                debugPrint(
-                    "Failed \(DebuggingIdentifiers.failed) to fetch Forecast Value IDs with ID \(forecastID): \(error)"
-                )
-                return []
-            }
-        }
-    }
-
-    // Fetch forecast objects for a given data set
-    func fetchForecastObjects(
-        for data: (id: UUID, forecastID: NSManagedObjectID, forecastValueIDs: [NSManagedObjectID]),
-        in context: NSManagedObjectContext
-    ) async -> (UUID, Forecast?, [ForecastValue]) {
-        return await context.perform {
-            var forecast: Forecast?
-            var forecastValues: [ForecastValue] = []
-
-            do {
-                // Fetch the forecast object
-                forecast = try context.existingObject(with: data.forecastID) as? Forecast
-
-                // Fetch the first 3h of forecast values
-                for forecastValueID in data.forecastValueIDs.prefix(36) {
-                    if let forecastValue = try context.existingObject(with: forecastValueID) as? ForecastValue {
-                        forecastValues.append(forecastValue)
-                    }
-                }
-            } catch {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to fetch forecast Values with error: \(error)"
-                )
-            }
-            return (data.id, forecast, forecastValues)
-        }
-    }
-
-    // Convert NSDecimalNumber to Decimal
-    func decimal(from nsDecimalNumber: NSDecimalNumber?) -> Decimal {
-        nsDecimalNumber?.decimalValue ?? 0.0
-    }
-
-    // Convert NSSet to array of Ints for Predictions
-    func parseForecastValues(ofType type: String, from determinationID: NSManagedObjectID) async -> [Int]? {
-        let context = makeContext()
-        context.name = "parseForecastValues"
-
-        return await context.perform {
-            let request = NSFetchRequest<Forecast>(entityName: "Forecast")
-            request.predicate = NSPredicate(
-                format: "orefDetermination = %@ AND type == %@",
-                determinationID,
-                type
-            )
-            request.fetchLimit = 1
-            request.relationshipKeyPathsForPrefetching = ["forecastValues"]
-
-            do {
-                guard let forecast = try context.fetch(request).first else { return nil }
-                let values = forecast.forecastValuesArray.map { Int($0.value) }
-                return values.isEmpty ? nil : values
-            } catch {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to fetch forecast of type \(type): \(error)"
-                )
-                return nil
-            }
-        }
-    }
-
-    func getOrefDeterminationNotYetUploadedToNightscout(_ determinationIds: [NSManagedObjectID]) async -> Determination? {
-        var result: Determination?
-
-        guard let determinationId = determinationIds.first else {
-            return nil
-        }
-
-        let predictions = Predictions(
-            iob: await parseForecastValues(ofType: "iob", from: determinationId),
-            zt: await parseForecastValues(ofType: "zt", from: determinationId),
-            cob: await parseForecastValues(ofType: "cob", from: determinationId),
-            uam: await parseForecastValues(ofType: "uam", from: determinationId)
-        )
-
-        let context = makeContext()
-        context.name = "getOrefDeterminationNotYetUploadedToNightscout"
-        return await context.perform {
-            do {
-                let orefDetermination = try context.existingObject(with: determinationId) as? OrefDetermination
-
-                // Check if the fetched object is of the expected type
-                if let orefDetermination = orefDetermination {
-                    result = Determination(
-                        id: orefDetermination.id ?? UUID(),
-                        reason: orefDetermination.reason ?? "",
-                        units: orefDetermination.smbToDeliver as Decimal?,
-                        insulinReq: self.decimal(from: orefDetermination.insulinReq),
-                        eventualBG: orefDetermination.eventualBG as? Int,
-                        sensitivityRatio: self.decimal(from: orefDetermination.sensitivityRatio),
-                        rate: self.decimal(from: orefDetermination.rate),
-                        duration: self.decimal(from: orefDetermination.duration),
-                        iob: self.decimal(from: orefDetermination.iob),
-                        cob: Decimal(orefDetermination.cob),
-                        predictions: predictions,
-                        deliverAt: orefDetermination.deliverAt,
-                        carbsReq: orefDetermination.carbsRequired != 0 ? Decimal(orefDetermination.carbsRequired) : nil,
-                        temp: TempType(rawValue: orefDetermination.temp ?? "absolute"),
-                        bg: self.decimal(from: orefDetermination.glucose),
-                        reservoir: self.decimal(from: orefDetermination.reservoir),
-                        isf: self.decimal(from: orefDetermination.insulinSensitivity),
-                        timestamp: orefDetermination.timestamp,
-                        current_target: self.decimal(from: orefDetermination.currentTarget),
-                        minDelta: self.decimal(from: orefDetermination.minDelta),
-                        expectedDelta: self.decimal(from: orefDetermination.expectedDelta),
-                        minGuardBG: nil,
-                        minPredBG: nil,
-                        threshold: self.decimal(from: orefDetermination.threshold),
-                        carbRatio: self.decimal(from: orefDetermination.carbRatio),
-                        received: orefDetermination.enacted // this is actually part of NS...
-                    )
-                }
-            } catch {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to fetch managed object with error: \(error)"
-                )
-            }
-
-            return result
-        }
-    }
-
-    func fetchForecastHierarchy(for determinationID: NSManagedObjectID, in context: NSManagedObjectContext)
-    async throws -> [(id: UUID, forecastID: NSManagedObjectID, forecastValueIDs: [NSManagedObjectID])]
+    func fetchLastDetermination(within minutes: Int = 30, enactedOnly: Bool = false) async throws
+        -> OrefDeterminationRecord?
     {
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: Forecast.self,
-            onContext: context,
-            predicate: NSPredicate(format: "orefDetermination = %@", determinationID),
-            key: "type",
-            ascending: true,
-            relationshipKeyPathsForPrefetching: ["forecastValues"]
-        )
+        try await OrefDeterminationStore.fetchLast(within: minutes, enactedOnly: enactedOnly)
+    }
 
-        // Process results entirely within a single context.perform block to avoid data races
-        return await context.perform {
-            guard let forecasts = results as? [Forecast] else { return [] }
+    func fetchRecentDeterminations(within minutes: Int = 30) async throws -> [OrefDeterminationRecord] {
+        try await OrefDeterminationStore.fetchRecent(within: minutes)
+    }
 
-            // Create and return the result array entirely within this block
-            return forecasts.map { forecast in
-                // Use the helper property that already sorts by index
-                let sortedValues = forecast.forecastValuesArray
-                return (
-                    id: UUID(),
-                    forecastID: forecast.objectID,
-                    forecastValueIDs: sortedValues.map(\.objectID)
-                )
+    func fetchForecastHierarchy(for determinationPk: Int64) async throws
+        -> [(forecast: ForecastRecord, values: [ForecastValueRecord])]
+    {
+        try await ForecastStore.fetchHierarchy(for: determinationPk)
+    }
+
+    func buildDeterminationDTO(from record: OrefDeterminationRecord) async -> Determination {
+        // Reassemble the four forecast curves (empty → nil, as the former `parseForecastValues` did).
+        var predictions = Predictions(iob: nil, zt: nil, cob: nil, uam: nil)
+        if let pk = record.pk {
+            func values(_ type: String) async -> [Int]? {
+                let v = (try? await ForecastStore.fetchValues(type: type, for: pk)) ?? []
+                return v.isEmpty ? nil : v
             }
+            predictions = await Predictions(
+                iob: values("iob"),
+                zt: values("zt"),
+                cob: values("cob"),
+                uam: values("uam")
+            )
         }
+
+        return Determination(
+            id: record.id ?? UUID(),
+            reason: record.reason ?? "",
+            units: record.smbToDeliver,
+            insulinReq: record.insulinReq ?? 0,
+            // Mirrors the former `orefDetermination.eventualBG as? Int`, which always yielded nil
+            // (an NSDecimalNumber never bridges to Int via `as?`). Kept verbatim to stay in scope.
+            eventualBG: nil,
+            sensitivityRatio: record.sensitivityRatio ?? 0,
+            rate: record.rate ?? 0,
+            duration: record.duration ?? 0,
+            iob: record.iob ?? 0,
+            cob: Decimal(record.cob),
+            predictions: predictions,
+            deliverAt: record.deliverAt,
+            carbsReq: record.carbsRequired != 0 ? Decimal(record.carbsRequired) : nil,
+            temp: TempType(rawValue: record.temp ?? "absolute"),
+            bg: record.glucose ?? 0,
+            reservoir: record.reservoir ?? 0,
+            isf: record.insulinSensitivity ?? 0,
+            timestamp: record.timestamp,
+            current_target: record.currentTarget ?? 0,
+            minDelta: record.minDelta ?? 0,
+            expectedDelta: record.expectedDelta ?? 0,
+            minGuardBG: nil,
+            minPredBG: nil,
+            threshold: record.threshold ?? 0,
+            carbRatio: record.carbRatio ?? 0,
+            received: record.enacted // this is actually part of NS...
+        )
     }
 }

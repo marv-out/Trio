@@ -430,7 +430,39 @@ with `store`, `fetchNotYetUploaded`/observe, `delete`, `deleteOlderThan(90)`. To
 (but **not** `GlucoseStored`, which stays in Core Data) + `TrioApp` cleanup + `GlucoseStorageTests`.
 If this entanglement with the glucose path feels risky, defer it to the `GlucoseStored` step.
 
-### 🔧 Step 10 — `OrefDetermination` + `Forecast` + `ForecastValue` (planned, not yet implemented)
+### ✅ Step 10 — `OrefDetermination` + `Forecast` + `ForecastValue` (done, this branch)
+
+Implemented as planned below. Notable implementation decisions:
+- **Hot-path write is one transaction.** `OrefDeterminationStore.store(_:forecasts:)` inserts the
+  determination, reads back its `pk`, then inserts each `ForecastRecord`/`ForecastValueRecord` in a
+  single `write` — so `OpenAPS.processDetermination` never persists a dosing decision half-way. The
+  bolus-preview path uses `ForecastStore.storeOrphan` (nil FK).
+- **`timestamp` stays nil at creation.** Like the former Core Data path, `processDetermination` does
+  not set `timestamp`; it is stamped later by `APSManager.reportEnacted` (`updateEnacted(pk:enacted:)`,
+  which also clears `isUploadedToNS`).
+- **Two determination observations + a shared "latest" one.** `observeEnacted()` (Home enacted
+  display, subscriber applies the `timestamp >= halfHourAgo` staleness) and `observeForCobIobCharts()`
+  (bounded to the newest 500 rows, subscriber applies `deliverAt >= oneDayAgo`). The six
+  `coreDataPublisher.filteredByEntityName("OrefDetermination")` sinks (IOB, LiveActivity, Watch,
+  Garmin, ContactImage, Treatments) → `observeLatest()`; the Nightscout upload FRC →
+  `observeNotYetUploadedCount()` (wired in `wireUploadControllers`). `IOBService.currentIOB` stays
+  synchronous via `OrefDeterminationStore.fetchLatestSync()`.
+- **DTO builder.** `getOrefDeterminationNotYetUploadedToNightscout` collapsed into
+  `BaseDeterminationStorage.buildDeterminationDTO(from:)` (four `ForecastStore.fetchValues` calls).
+  The `eventualBG as? Int` → `nil` quirk and `received: enacted` mapping are preserved verbatim.
+- **Cascade delete.** `deleteOlderThan` on the determination (90d) and forecast (2d) stores cascade to
+  children via `ON DELETE CASCADE`; the old parent/child `ForecastValue` batch-delete helper is gone.
+- **Tests.** `DeterminationStorageTests` rewritten against an in-memory GRDB pool (fetchLast,
+  forecast-hierarchy fetch, enacted/suggested not-yet-uploaded splits, cascade delete, Decimal
+  round-trip); `JSONImporterTests` determination cases run through `importOrefDetermination(…, in: pool)`;
+  `TestAssembly` drops the Core Data `contextProvider` for `DeterminationStorage`.
+
+The Core Data `OrefDetermination`/`Forecast`/`ForecastValue` entities stay as the read-only migration
+source (`Determination+helper`/`Forecast+helper` fetch helpers are now dead but left for the final CD
+cleanup step).
+
+<details><summary>Original plan (for reference)</summary>
+
 
 The **first hot-path family** and the deepest relationship graph so far: a two-level tree
 `OrefDetermination —(1:n forecasts)→ Forecast —(1:n forecastValues)→ ForecastValue`. Unlike
@@ -566,10 +598,11 @@ Watch via `coreDataPublisher`). GRDB `ValueObservation` across processes needs e
 merging (see the "Cross-process" open item below). Consider landing the in-app path first and the
 extension observations as a follow-up if cross-process observation isn't yet proven.
 
+</details>
+
 ### ⏳ After the determination family
 
-1. `OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path. **Planned: see
-   Step 10 above.**
+1. ~~`OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.~~ **✅ done (Step 10).**
 2. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk, last.
 3. `GlucoseStored` (+ `DeletedGlucoseStored` 9b, if still deferred) — highest read volume; uses
    `ValueObservation` for the live charts.

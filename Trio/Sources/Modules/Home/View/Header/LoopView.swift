@@ -16,7 +16,7 @@ struct LoopView: View {
     let lastLoopDate: Date
     let manualTempBasal: Bool
 
-    let determination: [OrefDetermination]
+    let determination: [OrefDeterminationRecord]
 
     private let rect = CGRect(x: 0, y: 0, width: 18, height: 18)
 

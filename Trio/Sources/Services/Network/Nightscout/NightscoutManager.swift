@@ -142,25 +142,9 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     // replacing the previous changedObjects publisher plus the glucoseStorage.updatePublisher
     // fallback.
 
-    let determinationUploadControllerDelegate = FetchedResultsControllerDelegate()
-    lazy var determinationUploadController: NSFetchedResultsController<OrefDetermination> = {
-        let request = NSFetchRequest<OrefDetermination>(entityName: "OrefDetermination")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \OrefDetermination.deliverAt, ascending: true)]
-        request.predicate = NSPredicate(
-            format: "deliverAt >= %@ AND isUploadedToNS == %@",
-            Date.oneDayAgo as NSDate,
-            false as NSNumber
-        )
-        request.fetchBatchSize = 50
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = determinationUploadControllerDelegate
-        return controller
-    }()
+    // Determinations now live in GRDB; the "not yet uploaded" trigger is a ValueObservation
+    // (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
+    var determinationUploadObservationCancellable: AnyCancellable?
 
     // Overrides + their runs now live in GRDB; the "not yet uploaded" trigger is a ValueObservation
     // (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
@@ -224,11 +208,12 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
         /// where the first uploaded non-enacted determination (i.e., "suggested"), lacks the "enacted" data.
         Task {
             do {
-                let lastEnactedDeterminationID = try await determinationStorage
-                    .fetchLastDeterminationObjectID(predicate: NSPredicate.enactedDetermination)
-
-                self.lastEnactedDetermination = await determinationStorage
-                    .getOrefDeterminationNotYetUploadedToNightscout(lastEnactedDeterminationID)
+                if let lastEnacted = try await determinationStorage.fetchLastDetermination(
+                    within: 30,
+                    enactedOnly: true
+                ) {
+                    self.lastEnactedDetermination = await determinationStorage.buildDeterminationDTO(from: lastEnacted)
+                }
             } catch {
                 debug(
                     .default,
@@ -466,11 +451,9 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
         // TDD now lives in GRDB.
         let tdd: Decimal? = try await TDDStore.mostRecent(since: Date.halfHourAgo)?.total
 
-        // Suggested / Enacted
-        async let enactedDeterminationID = determinationStorage
-            .fetchLastDeterminationObjectID(predicate: NSPredicate.enactedDeterminationsNotYetUploadedToNightscout)
-        async let suggestedDeterminationID = determinationStorage
-            .fetchLastDeterminationObjectID(predicate: NSPredicate.suggestedDeterminationsNotYetUploadedToNightscout)
+        // Suggested / Enacted (GRDB records → Nightscout DTO)
+        async let enactedRecord = OrefDeterminationStore.fetchEnactedNotYetUploaded()
+        async let suggestedRecord = OrefDeterminationStore.fetchSuggestedNotYetUploaded()
 
         // OpenAPS Status
         async let fetchedBattery = fetchBattery()
@@ -478,10 +461,15 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
         async let fetchedIOBEntry = storage.retrieveAsync(OpenAPS.Monitor.iob, as: [IOBEntry].self)
         async let fetchedPumpStatus = storage.retrieveAsync(OpenAPS.Monitor.status, as: PumpStatus.self)
 
-        var (fetchedEnactedDetermination, fetchedSuggestedDetermination) = try await (
-            determinationStorage.getOrefDeterminationNotYetUploadedToNightscout(enactedDeterminationID),
-            determinationStorage.getOrefDeterminationNotYetUploadedToNightscout(suggestedDeterminationID)
-        )
+        let (enactedRecordResolved, suggestedRecordResolved) = try await (enactedRecord, suggestedRecord)
+        var fetchedEnactedDetermination: Determination?
+        if let enactedRecordResolved {
+            fetchedEnactedDetermination = await determinationStorage.buildDeterminationDTO(from: enactedRecordResolved)
+        }
+        var fetchedSuggestedDetermination: Determination?
+        if let suggestedRecordResolved {
+            fetchedSuggestedDetermination = await determinationStorage.buildDeterminationDTO(from: suggestedRecordResolved)
+        }
 
         // Guard to ensure both determinations are not nil
         guard fetchedEnactedDetermination != nil || fetchedSuggestedDetermination != nil else {
@@ -627,26 +615,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     }
 
     private func updateOrefDeterminationAsUploaded(_ determination: [Determination]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateOrefDeterminationAsUploaded"
-        await context.perform {
-            let ids = determination.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<OrefDetermination> = OrefDetermination.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToNS = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error.userInfo)"
-                )
-            }
+        let ids = determination.compactMap(\.id)
+        do {
+            try await OrefDeterminationStore.markUploaded(ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error)"
+            )
         }
     }
 

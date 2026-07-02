@@ -96,15 +96,22 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
     }
 
     private func registerHandlers() {
-        coreDataPublisher?.filteredByEntityName("OrefDetermination").sink { [weak self] _ in
-            guard let self = self else { return }
-            // Skip if no watch is paired or app not installed
-            guard let session = self.session, session.isPaired, session.isReachable, session.isWatchAppInstalled else { return }
-            Task {
-                let state = await self.setupWatchState()
-                await self.sendDataToWatch(state)
-            }
-        }.store(in: &subscriptions)
+        // GRDB observation replaces the Core Data `filteredByEntityName("OrefDetermination")` sink.
+        OrefDeterminationStore.observeLatest()
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] _ in
+                    guard let self = self else { return }
+                    // Skip if no watch is paired or app not installed
+                    guard let session = self.session, session.isPaired, session.isReachable,
+                          session.isWatchAppInstalled else { return }
+                    Task {
+                        let state = await self.setupWatchState()
+                        await self.sendDataToWatch(state)
+                    }
+                }
+            )
+            .store(in: &subscriptions)
 
         // Due to the Batch insert this only is used for observing Deletion of Glucose entries
         coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
@@ -195,18 +202,17 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
 
             // Get NSManagedObjectIDs
             let glucoseIds = try await fetchGlucose()
-            let determinationIds = try await determinationStorage.fetchLastDeterminationObjectID(
-                predicate: NSPredicate.predicateFor30MinAgoForDetermination
+            // Determination + override + temp target are GRDB value types (no NSManagedObjectID round-trip).
+            let latestDetermination = try await determinationStorage.fetchLastDetermination(
+                within: 30,
+                enactedOnly: false
             )
-            // Override + temp target presets are GRDB value types (no NSManagedObjectID round-trip).
             let overridePresets = try await overrideStorage.fetchForOverridePresets()
             let tempTargetPresets = try await tempTargetStorage.fetchForTempTargetPresets()
 
             // Get NSManagedObjects
             let glucoseObjects: [GlucoseStored] = try await CoreDataStack.shared
                 .getNSManagedObject(with: glucoseIds, context: context)
-            let determinationObjects: [OrefDetermination] = try await CoreDataStack.shared
-                .getNSManagedObject(with: determinationIds, context: context)
 
             return await context.perform {
                 var watchState = WatchState(date: Date())
@@ -223,7 +229,7 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
                 let iob = self.iobService.currentIOB ?? 0
                 watchState.iob = Formatter.decimalFormatterWithTwoFractionDigits.string(from: iob as NSNumber)
 
-                if let latestDetermination = determinationObjects.first {
+                if let latestDetermination {
                     let cob = NSNumber(value: latestDetermination.cob)
                     watchState.cob = Formatter.integerFormatter.string(from: cob)
                 }
@@ -652,19 +658,14 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
                     guard let self = self else { return }
 
                     do {
-                        let context = CoreDataStack.shared.newTaskContext()
-                        context.name = "requestBolusRecommendation"
-                        // Fetch determination data
-                        let determinationIds = try await determinationStorage.fetchLastDeterminationObjectID(
-                            predicate: NSPredicate.predicateFor30MinAgoForDetermination
-                        )
-                        let determinationObjects: [OrefDetermination] = try await CoreDataStack.shared.getNSManagedObject(
-                            with: determinationIds,
-                            context: context
+                        // Fetch determination data (GRDB value type)
+                        let determination = try await determinationStorage.fetchLastDetermination(
+                            within: 30,
+                            enactedOnly: false
                         )
 
                         await MainActor.run {
-                            minPredBG = determinationObjects.first?.minPredBGFromReason ?? 54
+                            minPredBG = determination?.minPredBGFromReason ?? 54
                         }
 
                     } catch let error as CoreDataError {

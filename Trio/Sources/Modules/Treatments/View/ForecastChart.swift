@@ -80,7 +80,7 @@ struct ForecastChart: View {
                 if let simulatedDetermination = state.simulatedDetermination, let eventualBG = simulatedDetermination.eventualBG {
                     eventualGlucoseBadge(for: eventualBG)
                 } else if let lastDetermination = state.determination.first, let eventualBG = lastDetermination.eventualBG {
-                    eventualGlucoseBadge(for: Int(truncating: eventualBG))
+                    eventualGlucoseBadge(for: Int(truncating: NSDecimalNumber(decimal: eventualBG)))
                 } else {
                     Text("---")
                         .font(.footnote)
@@ -254,7 +254,7 @@ struct ForecastChart: View {
     private func drawGlucose() -> some ChartContent {
         ForEach(state.glucoseFromPersistence) { item in
             let glucoseToDisplay = state.units == .mgdL ? Decimal(item.glucose) : Decimal(item.glucose).asMmolL
-            let targetGlucose = (state.determination.first?.currentTarget ?? state.currentBGTarget as NSDecimalNumber) as Decimal
+            let targetGlucose = state.determination.first?.currentTarget ?? state.currentBGTarget
 
             // TODO: workaround for now: set low value to 55, to have dynamic color shades between 55 and user-set low (approx. 70); same for high glucose
             let hardCodedLow = Decimal(55)

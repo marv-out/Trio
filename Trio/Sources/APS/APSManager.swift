@@ -702,8 +702,8 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func enactDetermination() async throws {
-        guard let determinationID = try await determinationStorage
-            .fetchLastDeterminationObjectID(predicate: NSPredicate.predicateFor30MinAgoForDetermination).first
+        guard let determination = try await determinationStorage
+            .fetchLastDetermination(within: 30, enactedOnly: false)
         else {
             throw APSError.apsError(message: "Determination not found")
         }
@@ -723,7 +723,7 @@ final class BaseAPSManager: APSManager, Injectable {
             throw APSError.manualBasalTemp(message: "Loop not possible during the manual basal temp")
         }
 
-        let (rateDecimal, durationInSeconds, smbToDeliver) = try await setValues(determinationID: determinationID)
+        let (rateDecimal, durationInSeconds, smbToDeliver) = setValues(from: determination)
 
         if let rate = rateDecimal, let duration = durationInSeconds {
             try await performBasal(pump: pump, rate: rate, duration: duration)
@@ -735,24 +735,13 @@ final class BaseAPSManager: APSManager, Injectable {
         }
     }
 
-    private func setValues(determinationID: NSManagedObjectID) async throws
+    private func setValues(from determination: OrefDeterminationRecord)
         -> (NSDecimalNumber?, TimeInterval?, NSDecimalNumber?)
     {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "setValues"
-        return try await context.perform {
-            do {
-                let determination = try context.existingObject(with: determinationID) as? OrefDetermination
-
-                let rate = determination?.rate
-                let duration = determination?.duration.flatMap { TimeInterval(truncating: $0) * 60 }
-                let smbToDeliver = determination?.smbToDeliver ?? 0
-
-                return (rate, duration, smbToDeliver)
-            } catch {
-                throw error
-            }
-        }
+        let rate = determination.rate.map { NSDecimalNumber(decimal: $0) }
+        let duration = determination.duration.map { TimeInterval(truncating: NSDecimalNumber(decimal: $0)) * 60 }
+        let smbToDeliver = determination.smbToDeliver.map { NSDecimalNumber(decimal: $0) } ?? 0
+        return (rate, duration, smbToDeliver)
     }
 
     private func performBasal(pump: PumpManager, rate: NSDecimalNumber, duration: TimeInterval) async throws {
@@ -766,31 +755,16 @@ final class BaseAPSManager: APSManager, Injectable {
 
     private func reportEnacted(wasEnacted: Bool) async {
         do {
-            guard let determinationID = try await determinationStorage
-                .fetchLastDeterminationObjectID(predicate: NSPredicate.predicateFor30MinAgoForDetermination).first
+            guard let determination = try await determinationStorage
+                .fetchLastDetermination(within: 30, enactedOnly: false),
+                let pk = determination.pk
             else {
                 debug(.apsManager, "No determination found to report enacted status")
                 return
             }
 
-            let context = CoreDataStack.shared.newTaskContext()
-            context.name = "reportEnacted"
-            try await context.perform {
-                guard let determinationUpdated = try context
-                    .existingObject(with: determinationID) as? OrefDetermination
-                else {
-                    debug(.apsManager, "Could not find determination object in context")
-                    return
-                }
-
-                determinationUpdated.timestamp = Date()
-                determinationUpdated.enacted = wasEnacted
-                determinationUpdated.isUploadedToNS = false
-
-                guard context.hasChanges else { return }
-                try context.save()
-                debug(.apsManager, "Determination enacted. Enacted: \(wasEnacted)")
-            }
+            try await OrefDeterminationStore.updateEnacted(pk: pk, enacted: wasEnacted)
+            debug(.apsManager, "Determination enacted. Enacted: \(wasEnacted)")
         } catch {
             debug(
                 .apsManager,

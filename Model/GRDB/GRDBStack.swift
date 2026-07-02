@@ -57,6 +57,7 @@ final class GRDBStack {
         try await OverrideMigration.migrateIfNeeded(into: self)
         try await TempTargetMigration.migrateIfNeeded(into: self)
         try await CarbEntryMigration.migrateIfNeeded(into: self)
+        try await OrefDeterminationMigration.migrateIfNeeded(into: self)
     }
 
     // MARK: - Connection

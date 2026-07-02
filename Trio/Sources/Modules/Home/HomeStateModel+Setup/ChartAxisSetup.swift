@@ -39,7 +39,7 @@ extension Home.StateModel {
     }
 
     /// Recomputes the COB chart Y axis bounds from the fetched determination objects.
-    @MainActor func yAxisChartDataCobChart(determinations: [OrefDetermination]) {
+    @MainActor func yAxisChartDataCobChart(determinations: [OrefDeterminationRecord]) {
         let cobMapped = determinations.map { Decimal($0.cob) }
 
         if let maxCob = cobMapped.max() {
@@ -52,8 +52,8 @@ extension Home.StateModel {
     }
 
     /// Recomputes the IOB chart Y axis bounds from the fetched determination objects.
-    @MainActor func yAxisChartDataIobChart(determinations: [OrefDetermination]) {
-        let iobMapped = determinations.compactMap { $0.iob?.decimalValue }
+    @MainActor func yAxisChartDataIobChart(determinations: [OrefDeterminationRecord]) {
+        let iobMapped = determinations.compactMap(\.iob)
 
         if let minIob = iobMapped.min(), let maxIob = iobMapped.max() {
             minValueIobChart = minIob

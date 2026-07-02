@@ -1,231 +1,181 @@
-import CoreData
 import Foundation
-import Swinject
+import GRDB
 import Testing
 
 @testable import Trio
 
-@Suite("Determination Storage Tests", .serialized) struct DeterminationStorageTests: Injectable {
-    @Injected() var storage: DeterminationStorage!
-    let resolver: Resolver
-    var coreDataStack: CoreDataStack!
-    var testContext: NSManagedObjectContext!
+@Suite("Determination Storage Tests", .serialized) struct DeterminationStorageTests {
+    var grdb: GRDBStack!
 
     init() async throws {
-        // Create test context
-        // As we are only using this single test context to initialize our in-memory DeterminationStorage we need to perform the Unit Tests serialized
-        coreDataStack = try await CoreDataStack.createForTests()
-        testContext = coreDataStack.newTaskContext()
-
-        // Create assembler with test assembly
-        let assembler = Assembler([
-            StorageAssembly(),
-            ServiceAssembly(),
-            APSAssembly(),
-            NetworkAssembly(),
-            UIAssembly(),
-            SecurityAssembly(),
-            TestAssembly(testContext: testContext) // Add our test assembly last to override Storage
-        ])
-
-        resolver = assembler.resolver
-        injectServices(resolver)
+        // In-memory GRDB store for tests (mirrors OverrideStorageTests / DynamicISFEnableTests).
+        grdb = try GRDBStack.makeInMemoryForTests()
     }
 
-    @Test("Storage is correctly initialized") func testStorageInitialization() {
-        // Verify storage exists
-        #expect(storage != nil, "DeterminationStorage should be injected")
+    // MARK: - fetchLast
 
-        // Verify it's the correct type
-        #expect(storage is BaseDeterminationStorage, "Storage should be of type BaseDeterminationStorage")
-    }
-
-    @Test("Test fetchLastDeterminationObjectID with different predicates") func testFetchLastDeterminationWithPredicates() async throws {
-        // Given
+    @Test("fetchLast returns the newest determination within the window") func testFetchLast() async throws {
         let date = Date()
         let id = UUID()
 
-        // Create a mock determination
-        await testContext.perform {
-            let determination = OrefDetermination(context: testContext)
-            determination.id = id
-            determination.deliverAt = date
-            determination.timestamp = date
-            determination.enacted = true
-            determination.isUploadedToNS = true
-            try? testContext.save()
-        }
+        try await OrefDeterminationStore.store(
+            OrefDeterminationRecord(id: id, deliverAt: date, timestamp: date, enacted: true, isUploadedToNS: true),
+            pool: grdb.pool
+        )
 
-        // Tests with predicates that we use the most for this function
-        // 1. Test within 30 minutes
-        let results = try await storage
-            .fetchLastDeterminationObjectID(predicate: NSPredicate.predicateFor30MinAgoForDetermination)
-        #expect(results.count == 1, "Should find 1 determination within 30 minutes")
-        // Get NSManagedObjectID from exactDateResults
-        try await testContext.perform {
-            do {
-                guard let results = results.first,
-                      let object = try testContext.existingObject(with: results) as? OrefDetermination
-                else {
-                    throw TestError("Failed to fetch determination")
-                }
-                #expect(object.timestamp == date, "Determination within 30 minutes should have the same timestamp as date")
-                #expect(object.deliverAt == date, "Determination within 30 minutes should have the same deliverAt as date")
-                #expect(object.enacted == true, "Determination within 30 minutes should be enacted")
-                #expect(object.isUploadedToNS == true, "Determination within 30 minutes should be uploaded to NS")
-                #expect(object.id == id, "Determination within 30 minutes should have the same id")
-            } catch {
-                throw TestError("Failed to fetch determination")
-            }
-        }
+        let within = try await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: false, pool: grdb.pool)
+        #expect(within != nil, "Should find a determination within 30 minutes")
+        #expect(within?.id == id, "Should return the stored determination")
+        #expect(within?.enacted == true, "Determination should be enacted")
 
-        // 2. Test enacted determinations
-        let enactedPredicate = NSPredicate.enactedDetermination
-        let enactedResults = try await storage.fetchLastDeterminationObjectID(predicate: enactedPredicate)
-        #expect(enactedResults.count == 1, "Should find 1 enacted determination")
-        // Get NSManagedObjectID from enactedResults
-        try await testContext.perform {
-            do {
-                guard let results = enactedResults.first,
-                      let object = try testContext.existingObject(with: results) as? OrefDetermination
-                else {
-                    throw TestError("Failed to fetch determination")
-                }
-                #expect(object.enacted == true, "Enacted determination should be enacted")
-                #expect(object.isUploadedToNS == true, "Enacted determination should be uploaded to NS")
-                #expect(object.id == id, "Enacted determination should have the same id")
-                #expect(object.timestamp == date, "Enacted determination should have the same timestamp")
-                #expect(object.deliverAt == date, "Enacted determination should have the same deliverAt")
-
-                // Delete the determination
-                testContext.delete(object)
-                try testContext.save()
-            } catch {
-                throw TestError("Failed to fetch determination")
-            }
-        }
+        let enacted = try await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: true, pool: grdb.pool)
+        #expect(enacted?.id == id, "Enacted-only fetch should find the enacted determination")
     }
 
-    @Test("Test complete forecast hierarchy prefetching") func testForecastHierarchyPrefetching() async throws {
-        // Given
+    @Test("fetchLast ignores determinations outside the window") func testFetchLastOutsideWindow() async throws {
+        let old = Date().addingTimeInterval(-60 * 60) // 1h ago
+
+        try await OrefDeterminationStore.store(
+            OrefDeterminationRecord(id: UUID(), deliverAt: old, timestamp: old, enacted: true),
+            pool: grdb.pool
+        )
+
+        let within = try await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: false, pool: grdb.pool)
+        #expect(within == nil, "Should not find determinations older than the window")
+    }
+
+    // MARK: - Forecast hierarchy
+
+    @Test("Store and fetch complete forecast hierarchy") func testForecastHierarchy() async throws {
         let date = Date()
-        let forecastTypes = ["iob", "cob", "zt", "uam"]
-        let expectedValuesPerForecast = 5
+        let forecasts: [OrefDeterminationStore.ForecastInput] = [
+            .init(type: "iob", date: date, values: [100, 110, 120, 130, 140]),
+            .init(type: "cob", date: date, values: [50, 55, 60, 65, 70]),
+            .init(type: "zt", date: date, values: [80, 88, 96, 104, 112]),
+            .init(type: "uam", date: date, values: [120, 105, 90, 75, 60])
+        ]
 
-        // STEP 1: Create test data
-        let id = try await createTestData(
-            date: date,
-            forecastTypes: forecastTypes,
-            expectedValuesPerForecast: expectedValuesPerForecast
+        let stored = try await OrefDeterminationStore.store(
+            OrefDeterminationRecord(id: UUID(), deliverAt: date, timestamp: date, enacted: true),
+            forecasts: forecasts,
+            pool: grdb.pool
         )
+        let pk = try #require(stored.pk)
 
-        // STEP 2: Test hierarchy fetching
-        let hierarchy = try await storage.fetchForecastHierarchy(
-            for: id,
-            in: testContext
-        )
+        let hierarchy = try await ForecastStore.fetchHierarchy(for: pk, pool: grdb.pool)
+        #expect(hierarchy.count == 4, "Should have all four forecast curves")
 
-        // Test hierarchy structure
-        #expect(hierarchy.count == forecastTypes.count, "Should have correct number of forecasts")
-
-        // STEP 3: Test individual forecasts
-        for data in hierarchy {
-            let (_, forecast, values) = await storage.fetchForecastObjects(
-                for: data,
-                in: testContext
-            )
-
-            // Test basic structure
-            #expect(forecast != nil, "Forecast should exist")
-            #expect(values.count == expectedValuesPerForecast, "Should have correct number of values")
-
-            // Test forecast type and values
-            if let forecast = forecast {
-                #expect(forecastTypes.contains(forecast.type ?? ""), "Should have valid forecast type")
-
-                // Test value patterns
-                let sortedValues = values.sorted { $0.index < $1.index }
-                switch forecast.type {
-                case "iob":
-                    #expect(sortedValues.first?.value == 100, "IOB should start at 100")
-                    #expect(sortedValues.last?.value == 140, "IOB should end at 140")
-                case "cob":
-                    #expect(sortedValues.first?.value == 50, "COB should start at 50")
-                    #expect(sortedValues.last?.value == 70, "COB should end at 70")
-                case "zt":
-                    #expect(sortedValues.first?.value == 80, "ZT should start at 80")
-                    #expect(sortedValues.last?.value == 112, "ZT should end at 112")
-                case "uam":
-                    #expect(sortedValues.first?.value == 120, "UAM should start at 120")
-                    #expect(sortedValues.last?.value == 60, "UAM should end at 60")
-                default:
-                    break
-                }
-            }
-        }
-
-        // STEP 4: Test relationship integrity
-        try await testContext.perform {
-            do {
-                let determination = try testContext.existingObject(with: id) as? OrefDetermination
-                let forecasts = Array(determination?.forecasts ?? [])
-
-                #expect(forecasts.count == forecastTypes.count, "Determination should have all forecasts")
-                #expect(
-                    forecasts.allSatisfy { Array($0.forecastValues ?? []).count == expectedValuesPerForecast },
-                    "Each forecast should have correct number of values"
-                )
-            } catch {
-                throw TestError("Failed to verify relationships: \(error)")
+        for entry in hierarchy {
+            #expect(entry.values.count == 5, "Each forecast should have five values")
+            let sorted = entry.values.sorted { $0.index < $1.index }
+            switch entry.forecast.type {
+            case "iob":
+                #expect(sorted.first?.value == 100 && sorted.last?.value == 140, "IOB pattern should match")
+            case "cob":
+                #expect(sorted.first?.value == 50 && sorted.last?.value == 70, "COB pattern should match")
+            case "zt":
+                #expect(sorted.first?.value == 80 && sorted.last?.value == 112, "ZT pattern should match")
+            case "uam":
+                #expect(sorted.first?.value == 120 && sorted.last?.value == 60, "UAM pattern should match")
+            default:
+                Issue.record("Unexpected forecast type: \(String(describing: entry.forecast.type))")
             }
         }
     }
 
-    private func createTestData(
-        date: Date,
-        forecastTypes: [String],
-        expectedValuesPerForecast: Int
-    ) async throws -> NSManagedObjectID {
-        try await testContext.perform {
-            let determination = OrefDetermination(context: testContext)
-            determination.id = UUID()
-            determination.deliverAt = date
-            determination.timestamp = date
-            determination.enacted = true
+    @Test("fetchValues returns the sorted values for one type") func testFetchValues() async throws {
+        let date = Date()
+        let stored = try await OrefDeterminationStore.store(
+            OrefDeterminationRecord(id: UUID(), deliverAt: date, timestamp: date, enacted: true),
+            forecasts: [.init(type: "iob", date: date, values: [100, 110, 120])],
+            pool: grdb.pool
+        )
+        let pk = try #require(stored.pk)
 
-            // Create all forecast types with values
-            for type in forecastTypes {
-                let forecast = Forecast(context: testContext)
-                forecast.id = UUID()
-                forecast.date = date
-                forecast.type = type
-                forecast.orefDetermination = determination
+        let iob = try await ForecastStore.fetchValues(type: "iob", for: pk, pool: grdb.pool)
+        #expect(iob == [100, 110, 120], "IOB values should come back in index order")
 
-                // Add test values with different patterns per type
-                for i in 0 ..< expectedValuesPerForecast {
-                    let value = ForecastValue(context: testContext)
-                    value.index = Int32(i)
+        let cob = try await ForecastStore.fetchValues(type: "cob", for: pk, pool: grdb.pool)
+        #expect(cob.isEmpty, "Missing forecast type should return an empty array")
+    }
 
-                    // Different value patterns for each type
-                    switch type {
-                    case "iob": value.value = Int32(100 + i * 10) // 100, 110, 120...
-                    case "cob": value.value = Int32(50 + i * 5) // 50, 55, 60...
-                    case "zt": value.value = Int32(80 + i * 8) // 80, 88, 96...
-                    case "uam": value.value = Int32(120 - i * 15) // 120, 105, 90...
-                    default: value.value = 0
-                    }
+    @Test("Deleting a determination cascades to its forecasts and values") func testCascadeDelete() async throws {
+        // Store a determination clearly older than the prune cutoff so `deleteOlderThan` removes it.
+        let old = Date().addingTimeInterval(-10)
+        try await OrefDeterminationStore.store(
+            OrefDeterminationRecord(id: UUID(), deliverAt: old, timestamp: old, enacted: true),
+            forecasts: [.init(type: "iob", date: old, values: [1, 2, 3])],
+            pool: grdb.pool
+        )
 
-                    value.forecast = forecast
-                }
-            }
+        // Precondition: children exist.
+        let forecastsBefore = try await grdb.pool.read { db in try ForecastRecord.fetchCount(db) }
+        let valuesBefore = try await grdb.pool.read { db in try ForecastValueRecord.fetchCount(db) }
+        #expect(forecastsBefore == 1 && valuesBefore == 3, "Forecast tree should be stored")
 
-            do {
-                try testContext.save()
+        // cutoff = now → the 10s-old determination is deleted, cascading to its forecast + values.
+        try await OrefDeterminationStore.deleteOlderThan(days: 0)
 
-                return determination.objectID
-            } catch {
-                throw TestError("Failed to create test data: \(error)")
-            }
-        }
+        let forecastCount = try await grdb.pool.read { db in try ForecastRecord.fetchCount(db) }
+        let valueCount = try await grdb.pool.read { db in try ForecastValueRecord.fetchCount(db) }
+        #expect(forecastCount == 0, "Forecasts should be cascade-deleted with their determination")
+        #expect(valueCount == 0, "Forecast values should be cascade-deleted transitively")
+    }
+
+    // MARK: - Not-yet-uploaded splits
+
+    @Test("Enacted / suggested not-yet-uploaded fetches split by enacted flag") func testNotYetUploadedSplit() async throws {
+        let now = Date()
+
+        // An enacted, not-yet-uploaded determination
+        let enacted = try await OrefDeterminationStore.store(
+            OrefDeterminationRecord(id: UUID(), deliverAt: now, timestamp: now, enacted: true, isUploadedToNS: false),
+            pool: grdb.pool
+        )
+        // A suggested (non-enacted), not-yet-uploaded determination, slightly older
+        let suggested = try await OrefDeterminationStore.store(
+            OrefDeterminationRecord(
+                id: UUID(),
+                deliverAt: now.addingTimeInterval(-60),
+                enacted: false,
+                isUploadedToNS: false
+            ),
+            pool: grdb.pool
+        )
+
+        let fetchedEnacted = try await OrefDeterminationStore.fetchEnactedNotYetUploaded(pool: grdb.pool)
+        #expect(fetchedEnacted?.id == enacted.id, "Enacted fetch should return the enacted determination")
+
+        let fetchedSuggested = try await OrefDeterminationStore.fetchSuggestedNotYetUploaded(pool: grdb.pool)
+        #expect(fetchedSuggested?.id == suggested.id, "Suggested fetch should return the non-enacted determination")
+
+        // Marking uploaded removes them from the not-yet-uploaded sets.
+        try await OrefDeterminationStore.markUploaded(ids: [enacted.id!, suggested.id!], pool: grdb.pool)
+        let stillEnacted = try await OrefDeterminationStore.fetchEnactedNotYetUploaded(pool: grdb.pool)
+        let stillSuggested = try await OrefDeterminationStore.fetchSuggestedNotYetUploaded(pool: grdb.pool)
+        #expect(stillEnacted == nil, "Uploaded enacted determination should no longer be pending")
+        #expect(stillSuggested == nil, "Uploaded suggested determination should no longer be pending")
+    }
+
+    @Test("Decimals round-trip losslessly through TEXT storage") func testDecimalRoundTrip() async throws {
+        let date = Date()
+        let stored = try await OrefDeterminationStore.store(
+            OrefDeterminationRecord(
+                id: UUID(),
+                deliverAt: date,
+                cob: 12,
+                insulinReq: Decimal(string: "1.234")!,
+                iob: Decimal(string: "-0.5")!,
+                currentTarget: 100
+            ),
+            pool: grdb.pool
+        )
+        let pk = try #require(stored.pk)
+
+        let fetched = try await OrefDeterminationStore.fetch(pk: pk, pool: grdb.pool)
+        #expect(fetched?.insulinReq == Decimal(string: "1.234"), "insulinReq should round-trip losslessly")
+        #expect(fetched?.iob == Decimal(string: "-0.5"), "iob should round-trip losslessly")
+        #expect(fetched?.cob == 12, "cob should round-trip")
+        #expect(fetched?.currentTarget == 100, "currentTarget should round-trip")
     }
 }

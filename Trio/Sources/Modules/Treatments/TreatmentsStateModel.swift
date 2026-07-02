@@ -109,8 +109,8 @@ extension Treatments {
         var externalInsulin: Bool = false
         var showInfo: Bool = false
         var glucoseFromPersistence: [GlucoseStored] = []
-        var determination: [OrefDetermination] = []
-        var preprocessedData: [(id: UUID, forecast: Forecast, forecastValue: ForecastValue)] = []
+        var determination: [OrefDeterminationRecord] = []
+        var preprocessedData: [(id: UUID, forecast: ForecastRecord, forecastValue: ForecastValueRecord)] = []
         var predictionsForChart: Predictions?
         var simulatedDetermination: Determination?
 
@@ -153,21 +153,9 @@ extension Treatments {
             return controller
         }()
 
-        @ObservationIgnored let determinationControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var determinationController: NSFetchedResultsController<OrefDetermination> = {
-            let request = NSFetchRequest<OrefDetermination>(entityName: "OrefDetermination")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \OrefDetermination.deliverAt, ascending: false)]
-            request.predicate = NSPredicate.predicateFor30MinAgoForDetermination
-            request.fetchLimit = 1
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = determinationControllerDelegate
-            return controller
-        }()
+        // Determinations live in GRDB: a ValueObservation replaces the former
+        // `determinationController` NSFetchedResultsController (latest within the last 30 minutes).
+        @ObservationIgnored var determinationObservationCancellable: AnyCancellable?
 
         @ObservationIgnored let lastBolusControllerDelegate = FetchedResultsControllerDelegate()
         @ObservationIgnored private(set) lazy var lastBolusController: NSFetchedResultsController<PumpEventStored> = {
@@ -833,60 +821,63 @@ extension Treatments.StateModel {
     // MARK: - Determination Controller
 
     @MainActor func setupDeterminationController() {
-        determinationControllerDelegate.onContentChange = { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.updateDeterminationFromController()
-                self.insulinCalculated = await self.calculateInsulin()
-                let forecastData = self.mapForecastsFromController()
-                await self.updateForecasts(with: forecastData)
-            }
-        }
-
-        do {
-            try determinationController.performFetch()
-            updateDeterminationFromController()
-            Task { @MainActor in
-                self.insulinCalculated = await self.calculateInsulin()
-                let forecastData = self.mapForecastsFromController()
-                await self.updateForecasts(with: forecastData)
-            }
-        } catch {
-            debug(.default, "\(DebuggingIdentifiers.failed) Failed to perform determination fetch: \(error)")
-        }
+        determinationObservationCancellable = OrefDeterminationStore.observeLatest()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { completion in
+                    if case let .failure(error) = completion {
+                        debug(.default, "\(DebuggingIdentifiers.failed) Determination observation failed: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] record in
+                    guard let self else { return }
+                    // Apply the "within 30 minutes" rule (from `predicateFor30MinAgoForDetermination`)
+                    // here so the tracked region stays deterministic.
+                    let fresh = record.flatMap { ($0.deliverAt ?? .distantPast) >= Date.halfHourAgo ? $0 : nil }
+                    Task { @MainActor in
+                        self.updateDetermination(with: fresh)
+                        self.insulinCalculated = await self.calculateInsulin()
+                        let forecastData = await self.mapForecasts(from: fresh)
+                        await self.updateForecasts(with: forecastData)
+                    }
+                }
+            )
     }
 
-    @MainActor private func updateDeterminationFromController() {
-        guard let objects = determinationController.fetchedObjects,
-              let mostRecentDetermination = objects.first else { return }
+    @MainActor private func updateDetermination(with mostRecentDetermination: OrefDeterminationRecord?) {
+        guard let mostRecentDetermination else { return }
 
-        determination = objects
+        determination = [mostRecentDetermination]
 
         // setup vars for bolus calculation
-        insulinRequired = (mostRecentDetermination.insulinReq ?? 0) as Decimal
-        evBG = (mostRecentDetermination.eventualBG ?? 0) as Decimal
-        minPredBG = (mostRecentDetermination.minPredBGFromReason ?? 0) as Decimal
+        insulinRequired = mostRecentDetermination.insulinReq ?? 0
+        evBG = mostRecentDetermination.eventualBG ?? 0
+        minPredBG = mostRecentDetermination.minPredBGFromReason ?? 0
         lastLoopDate = apsManager.lastLoopDate as Date?
-        insulin = (mostRecentDetermination.insulinForManualBolus ?? 0) as Decimal
-        target = (mostRecentDetermination.currentTarget ?? currentBGTarget as NSDecimalNumber) as Decimal
-        isf = (mostRecentDetermination.insulinSensitivity ?? currentISF as NSDecimalNumber) as Decimal
-        cob = mostRecentDetermination.cob as Int16
-        iob = (mostRecentDetermination.iob ?? 0) as Decimal
-        basal = (mostRecentDetermination.tempBasal ?? 0) as Decimal
-        carbRatio = (mostRecentDetermination.carbRatio ?? currentCarbRatio as NSDecimalNumber) as Decimal
+        insulin = mostRecentDetermination.insulinForManualBolus ?? 0
+        target = mostRecentDetermination.currentTarget ?? currentBGTarget
+        isf = mostRecentDetermination.insulinSensitivity ?? currentISF
+        cob = mostRecentDetermination.cob
+        iob = mostRecentDetermination.iob ?? 0
+        basal = mostRecentDetermination.tempBasal ?? 0
+        carbRatio = mostRecentDetermination.carbRatio ?? currentCarbRatio
     }
 
-    @MainActor private func mapForecastsFromController() -> Determination? {
-        guard let determinationObject = determinationController.fetchedObjects?.first else {
+    @MainActor private func mapForecasts(from record: OrefDeterminationRecord?) async -> Determination? {
+        guard let pk = record?.pk else {
             return nil
         }
 
-        let forecastsSet = determinationObject.forecasts ?? []
-        let predictions = Predictions(
-            iob: forecastsSet.extractValues(for: "iob"),
-            zt: forecastsSet.extractValues(for: "zt"),
-            cob: forecastsSet.extractValues(for: "cob"),
-            uam: forecastsSet.extractValues(for: "uam")
+        func values(_ type: String) async -> [Int]? {
+            let fetched = (try? await ForecastStore.fetchValues(type: type, for: pk)) ?? []
+            return fetched.isEmpty ? nil : fetched
+        }
+
+        let predictions = await Predictions(
+            iob: values("iob"),
+            zt: values("zt"),
+            cob: values("cob"),
+            uam: values("uam")
         )
 
         return Determination(
@@ -1004,15 +995,5 @@ extension Treatments.StateModel {
 
     @MainActor private func updateLastBolusFromController() {
         lastPumpBolus = lastBolusController.fetchedObjects?.first
-    }
-}
-
-private extension Set where Element == Forecast {
-    /// Extracts the sorted forecast values for a given prediction type (iob/zt/cob/uam).
-    func extractValues(for type: String) -> [Int]? {
-        let values = first { $0.type == type }?
-            .forecastValuesArray
-            .map { Int($0.value) }
-        return (values?.isEmpty ?? true) ? nil : values
     }
 }

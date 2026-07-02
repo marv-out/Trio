@@ -19,10 +19,9 @@ import Foundation
         let stateIntent = StateIntentRequest()
 
         let glucoseValues = try? stateIntent.getLastGlucose(onContext: context)
-        let iob_cob_value = try? stateIntent.getIobAndCob(onContext: context)
+        let iob_cob = await stateIntent.getIobAndCob()
 
         guard let glucoseValue = glucoseValues else { throw StateIntentError.NoBG }
-        guard let iob_cob = iob_cob_value else { throw StateIntentError.NoIOBCOB }
         let BG = StateResults(
             glucose: glucoseValue.glucose,
             trend: glucoseValue.trend,

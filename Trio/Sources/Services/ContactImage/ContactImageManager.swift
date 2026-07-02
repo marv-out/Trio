@@ -34,7 +34,6 @@ final class BaseContactImageManager: NSObject, ContactImageManager, Injectable {
 
     // Queue for handling Core Data change notifications
     private let queue = DispatchQueue(label: "BaseContactImageManager.queue", qos: .background)
-    private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
     private var subscriptions = Set<AnyCancellable>()
 
     private var units: GlucoseUnits = .mgdL
@@ -54,11 +53,6 @@ final class BaseContactImageManager: NSObject, ContactImageManager, Injectable {
         super.init()
         injectServices(resolver)
         units = settingsManager.settings.units
-        coreDataPublisher =
-            CoreDataStack.shared.entityChangePublisher
-                .receive(on: queue)
-                .share()
-                .eraseToAnyPublisher()
 
         glucoseStorage.updatePublisher
             .receive(on: DispatchQueue.global(qos: .background))
@@ -88,36 +82,28 @@ final class BaseContactImageManager: NSObject, ContactImageManager, Injectable {
     // MARK: - Core Data observation
 
     private func registerHandlers() {
-        coreDataPublisher?.filteredByEntityName("OrefDetermination").sink { [weak self] _ in
-            guard let self = self else { return }
-            Task {
-                await self.updateContactImageState()
-                await self.updateContactImages()
-            }
-        }.store(in: &subscriptions)
+        // GRDB observation replaces the Core Data `filteredByEntityName("OrefDetermination")` sink;
+        // fires on any new determination (enacted or suggested).
+        OrefDeterminationStore.observeLatest()
+            .receive(on: queue)
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] _ in
+                    guard let self = self else { return }
+                    Task {
+                        await self.updateContactImageState()
+                        await self.updateContactImages()
+                    }
+                }
+            )
+            .store(in: &subscriptions)
     }
 
-    // MARK: - Core Data Fetches
+    // MARK: - Fetches
 
-    private func fetchlastDetermination() async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchlastDetermination"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: OrefDetermination.self,
-            onContext: context,
-            predicate: NSPredicate(format: "deliverAt >= %@", Date.halfHourAgo as NSDate), // fetches enacted and suggested
-            key: "deliverAt",
-            ascending: false,
-            fetchLimit: 1
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [OrefDetermination] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID)
-        }
+    private func fetchlastDetermination() async throws -> OrefDeterminationRecord? {
+        // fetches enacted and suggested within the last 30 minutes, newest first
+        try await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: false)
     }
 
     private func fetchGlucose() async throws -> [NSManagedObjectID] {
@@ -196,14 +182,11 @@ final class BaseContactImageManager: NSObject, ContactImageManager, Injectable {
         do {
             // Get NSManagedObjectIDs on backgroundContext
             let glucoseValuesIds = try await fetchGlucose()
-            let determinationIds = try await fetchlastDetermination()
+            let lastDetermination = try await fetchlastDetermination()
 
             // Get NSManagedObjects on MainActor
             let glucoseObjects: [GlucoseStored] = try await CoreDataStack.shared
                 .getNSManagedObject(with: glucoseValuesIds, context: viewContext)
-            let determinationObjects: [OrefDetermination] = try await CoreDataStack.shared
-                .getNSManagedObject(with: determinationIds, context: viewContext)
-            let lastDetermination = determinationObjects.last
 
             if let firstGlucoseValue = glucoseObjects.first {
                 let value = settingsManager.settings.units == .mgdL
@@ -236,11 +219,12 @@ final class BaseContactImageManager: NSObject, ContactImageManager, Injectable {
                 state.cobText = "0"
             }
 
-            if let eventualBG = settingsManager.settings.units == .mgdL ? lastDetermination?
-                .eventualBG : lastDetermination?
-                .eventualBG?.decimalValue.asMmolL as NSDecimalNumber?
-            {
-                let eventualBGAsString = Formatter.decimalFormatterWithOneFractionDigit.string(from: eventualBG)
+            let eventualBGDecimal: Decimal? = settingsManager.settings.units == .mgdL
+                ? lastDetermination?.eventualBG
+                : lastDetermination?.eventualBG?.asMmolL
+            if let eventualBGDecimal {
+                let eventualBGAsString = Formatter.decimalFormatterWithOneFractionDigit
+                    .string(from: eventualBGDecimal as NSDecimalNumber)
                 state.eventualBG = eventualBGAsString.map { "⇢ " + $0 }
             }
 

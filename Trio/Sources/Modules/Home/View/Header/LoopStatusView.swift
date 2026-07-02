@@ -12,7 +12,7 @@ struct LoopStatusView: View {
     @State var helpSheetDetent = PresentationDetent.fraction(0.9)
 
     @State private var statusTitle: String = ""
-    @State private var lastDetermination: OrefDetermination?
+    @State private var lastDetermination: OrefDeterminationRecord?
 
     var body: some View {
         ScrollView {
@@ -281,7 +281,7 @@ struct LoopStatusView: View {
         return updatedConclusion.capitalizingFirstLetter()
     }
 
-    private func getComputedTags(_ determination: OrefDetermination) -> [String] {
+    private func getComputedTags(_ determination: OrefDeterminationRecord) -> [String] {
         var tags: [String] = determination.reasonParts
 
         if state.isSmoothingEnabled {

@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 struct ForecastView: ChartContent {
-    let preprocessedData: [(id: UUID, forecast: Forecast, forecastValue: ForecastValue)]
+    let preprocessedData: [(id: UUID, forecast: ForecastRecord, forecastValue: ForecastValueRecord)]
     let minForecast: [Int]
     let maxForecast: [Int]
     let units: GlucoseUnits

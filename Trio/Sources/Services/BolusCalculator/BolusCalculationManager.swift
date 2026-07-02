@@ -245,7 +245,7 @@ final class BaseBolusCalculationManager: BolusCalculationManager, Injectable {
     ///   - currentBasal: Current basal rate
     /// - Returns: BolusCalculatorVariables containing updated calculation parameters
     private func updateBolusCalculatorVariables(
-        with objects: [OrefDetermination],
+        with objects: [OrefDeterminationRecord],
         currentBGTarget: Decimal,
         currentISF: Decimal,
         currentCarbRatio: Decimal,
@@ -269,17 +269,17 @@ final class BaseBolusCalculationManager: BolusCalculationManager, Injectable {
         }
 
         return BolusCalculatorVariables(
-            insulinRequired: (mostRecentDetermination.insulinReq ?? 0) as Decimal,
-            evBG: (mostRecentDetermination.eventualBG ?? 0) as Decimal,
-            minPredBG: (mostRecentDetermination.minPredBGFromReason ?? 0) as Decimal,
+            insulinRequired: mostRecentDetermination.insulinReq ?? 0,
+            evBG: mostRecentDetermination.eventualBG ?? 0,
+            minPredBG: mostRecentDetermination.minPredBGFromReason ?? 0,
             lastLoopDate: apsManager.lastLoopDate as Date?,
-            insulin: (mostRecentDetermination.insulinForManualBolus ?? 0) as Decimal,
-            target: (mostRecentDetermination.currentTarget ?? currentBGTarget as NSDecimalNumber) as Decimal,
-            isf: (mostRecentDetermination.insulinSensitivity ?? NSDecimalNumber(decimal: currentISF)) as Decimal,
-            cob: mostRecentDetermination.cob as Int16,
-            iob: (mostRecentDetermination.iob ?? 0) as Decimal,
+            insulin: mostRecentDetermination.insulinForManualBolus ?? 0,
+            target: mostRecentDetermination.currentTarget ?? currentBGTarget,
+            isf: mostRecentDetermination.insulinSensitivity ?? currentISF,
+            cob: mostRecentDetermination.cob,
+            iob: mostRecentDetermination.iob ?? 0,
             basal: currentBasal,
-            carbRatio: (mostRecentDetermination.carbRatio ?? NSDecimalNumber(decimal: currentCarbRatio)) as Decimal,
+            carbRatio: mostRecentDetermination.carbRatio ?? currentCarbRatio,
             insulinCalculated: 0
         )
     }
@@ -323,25 +323,17 @@ final class BaseBolusCalculationManager: BolusCalculationManager, Injectable {
                 self.updateGlucoseVariables(with: glucoseObjects)
             }
 
-            // Fetch determination data
-            let determinationFetchContext = CoreDataStack.shared.newTaskContext()
-            determinationFetchContext.name = "handleBolusCalculation.determination"
-            let determinationIds = try await determinationStorage.fetchLastDeterminationObjectID(
-                predicate: NSPredicate.predicateFor30MinAgoForDetermination
+            // Fetch determination data (GRDB value type — no context round-trip)
+            let determinationObjects = try await determinationStorage
+                .fetchLastDetermination(within: 30, enactedOnly: false)
+                .map { [$0] } ?? []
+            let bolusVars = updateBolusCalculatorVariables(
+                with: determinationObjects,
+                currentBGTarget: currentBGTarget,
+                currentISF: currentISF,
+                currentCarbRatio: currentCarbRatio,
+                currentBasal: currentBasal
             )
-            let determinationObjects: [OrefDetermination] = try await CoreDataStack.shared.getNSManagedObject(
-                with: determinationIds,
-                context: determinationFetchContext
-            )
-            let bolusVars = await determinationFetchContext.perform {
-                self.updateBolusCalculatorVariables(
-                    with: determinationObjects,
-                    currentBGTarget: currentBGTarget,
-                    currentISF: currentISF,
-                    currentCarbRatio: currentCarbRatio,
-                    currentBasal: currentBasal
-                )
-            }
 
             // If the entry is backdated (user explicitly changed the date), set carbs to 0
             // This prevents double-counting of carbs (entered carbs + COB from backdated entry)

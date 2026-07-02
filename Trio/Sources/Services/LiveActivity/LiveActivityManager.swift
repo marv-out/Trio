@@ -160,11 +160,15 @@ final class LiveActivityData: ObservableObject {
             Task { await self?.loadGlucose() }
         }.store(in: &subscriptions)
 
-        coreDataPublisher?.filteredByEntityName("OrefDetermination")
+        // GRDB observation replaces the Core Data `filteredByEntityName("OrefDetermination")` sink.
+        OrefDeterminationStore.observeLatest()
             .debounce(for: .seconds(2), scheduler: DispatchQueue.global(qos: .utility))
-            .sink { [weak self] _ in
-                Task { await self?.loadDetermination() }
-            }.store(in: &subscriptions)
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] _ in
+                    Task { await self?.loadDetermination() }
+                }
+            ).store(in: &subscriptions)
 
         iobService.iobPublisher
             .debounce(for: .seconds(2), scheduler: DispatchQueue.global(qos: .utility))

@@ -241,17 +241,13 @@ class BundleReference {}
         let suggestedUrl = URL(filePath: suggestedPath)
 
         let now = Date("2025-04-28T20:50:00.000Z")!
-        try await importer.importOrefDetermination(enactedUrl: enactedUrl, suggestedUrl: suggestedUrl, now: now)
-        // run the import againt to check our deduplication logic
-        try await importer.importOrefDetermination(enactedUrl: enactedUrl, suggestedUrl: suggestedUrl, now: now)
+        try await importer.importOrefDetermination(enactedUrl: enactedUrl, suggestedUrl: suggestedUrl, now: now, in: grdb.pool)
+        // run the import again to check our deduplication logic
+        try await importer.importOrefDetermination(enactedUrl: enactedUrl, suggestedUrl: suggestedUrl, now: now, in: grdb.pool)
 
-        let determinations = try await coreDataStack.fetchEntitiesAsync(
-            ofType: OrefDetermination.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "deliverAt",
-            ascending: false
-        ) as? [OrefDetermination] ?? []
+        let determinations = try await grdb.pool.read { db in
+            try OrefDeterminationRecord.order(OrefDeterminationRecord.Columns.deliverAt.desc).fetchAll(db)
+        }
 
         #expect(determinations.count == 1) // single determination, as enacted.deliverAt and suggested.deliverAt match
 
@@ -261,91 +257,43 @@ class BundleReference {}
         #expect(determination.timestamp == Date("2025-04-28T19:41:48.453Z"))
         #expect(determination.enacted == true)
         #expect(determination.reason?.starts(with: "Autosens ratio: 0.99") == true)
-        #expect(determination.insulinReq == Decimal(string: "0.29").map(NSDecimalNumber.init))
-        #expect(determination.eventualBG! == NSDecimalNumber(160))
-        #expect(determination.sensitivityRatio == Decimal(string: "0.9863849810728643").map(NSDecimalNumber.init))
-        #expect(determination.rate == Decimal(string: "0").map(NSDecimalNumber.init))
-        #expect(determination.duration == NSDecimalNumber(60))
-        #expect(determination.iob == Decimal(string: "1.249").map(NSDecimalNumber.init))
+        #expect(determination.insulinReq == Decimal(string: "0.29"))
+        #expect(determination.eventualBG == 160)
+        #expect(determination.sensitivityRatio == Decimal(string: "0.9863849810728643"))
+        #expect(determination.rate == Decimal(string: "0"))
+        #expect(determination.duration == 60)
+        #expect(determination.iob == Decimal(string: "1.249"))
         #expect(determination.cob == 34)
         #expect(determination.temp == "absolute")
-        #expect(determination.glucose == NSDecimalNumber(85))
-        #expect(determination.reservoir == Decimal(string: "3735928559").map(NSDecimalNumber.init))
-        #expect(determination.insulinSensitivity == Decimal(string: "4.6").map(NSDecimalNumber.init))
-        #expect(determination.currentTarget == Decimal(string: "94").map(NSDecimalNumber.init))
-        #expect(determination.minDelta == NSDecimalNumber(5))
-        #expect(determination.expectedDelta == Decimal(string: "-5.9").map(NSDecimalNumber.init))
-        #expect(determination.threshold == Decimal(string: "3.7").map(NSDecimalNumber.init))
+        #expect(determination.glucose == 85)
+        #expect(determination.reservoir == Decimal(string: "3735928559"))
+        #expect(determination.insulinSensitivity == Decimal(string: "4.6"))
+        #expect(determination.currentTarget == Decimal(string: "94"))
+        #expect(determination.minDelta == 5)
+        #expect(determination.expectedDelta == Decimal(string: "-5.9"))
+        #expect(determination.threshold == Decimal(string: "3.7"))
         #expect(determination.carbRatio == nil) // not present in JSON
 
-        let forecasts = try await coreDataStack.fetchEntitiesAsync(
-            ofType: Forecast.self,
-            onContext: context,
-            predicate: NSPredicate(format: "orefDetermination = %@", determination.objectID),
-            key: "type",
-            ascending: true,
-            relationshipKeyPathsForPrefetching: ["forecastValues"]
-        )
+        let hierarchy = try await ForecastStore.fetchHierarchy(for: determination.pk!, pool: grdb.pool)
 
-        var forecastHierarchy: [(forecastID: NSManagedObjectID, forecastValueIDs: [NSManagedObjectID])] = []
+        for entry in hierarchy {
+            #expect(entry.values.isNotEmpty == true)
 
-        await context.perform {
-            if let forecasts = forecasts as? [Forecast] {
-                for forecast in forecasts {
-                    // Use the helper property that already sorts by index
-                    let sortedValues = forecast.forecastValuesArray
-                    forecastHierarchy.append((
-                        forecastID: forecast.objectID,
-                        forecastValueIDs: sortedValues.map(\.objectID)
-                    ))
-                }
-            }
+            let sortedValues = entry.values.sorted { $0.index < $1.index }
+            let prefix = sortedValues.prefix(5).map { Int($0.value) }
+            let type = entry.forecast.type?.lowercased()
 
-            for entry in forecastHierarchy {
-                var forecastValueTuple: (Forecast?, [ForecastValue]) = (nil, [])
-
-                var forecast: Forecast?
-                var forecastValues: [ForecastValue] = []
-
-                do {
-                    // Fetch the forecast object
-                    forecast = try context.existingObject(with: entry.forecastID) as? Forecast
-
-                    // Fetch the first 3h of forecast values
-                    for forecastValueID in entry.forecastValueIDs.prefix(36) {
-                        if let forecastValue = try context.existingObject(with: forecastValueID) as? ForecastValue {
-                            forecastValues.append(forecastValue)
-                        }
-                    }
-                } catch {
-                    debugPrint(
-                        "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to fetch forecast Values with error: \(error.localizedDescription)"
-                    )
-                }
-                forecastValueTuple = (forecast, forecastValues)
-
-                // Basic checks
-                #expect(forecastValueTuple.0 != nil)
-                #expect(forecastValueTuple.1.isNotEmpty == true)
-
-                if let forecast = forecastValueTuple.0 {
-                    let sortedValues = forecastValueTuple.1.sorted { $0.index < $1.index }
-                    let prefix = sortedValues.prefix(5).compactMap(\.value)
-                    let type = forecast.type?.lowercased()
-
-                    switch type {
-                    case "zt":
-                        #expect(prefix == [85, 78, 71, 64, 58])
-                    case "iob":
-                        #expect(prefix == [85, 89, 92, 95, 97])
-                    case "uam":
-                        #expect(prefix == [85, 89, 93, 96, 99])
-                    case "cob":
-                        #expect(prefix == [85, 90, 94, 99, 103])
-                    default:
-                        break // Skip unknown forecast types silently
-                    }
-                }
+            switch type {
+            case "zt":
+                #expect(prefix == [85, 78, 71, 64, 58])
+            case "iob":
+                #expect(prefix == [85, 89, 92, 95, 97])
+            case "uam":
+                #expect(prefix == [85, 89, 93, 96, 99])
+            case "cob":
+                #expect(prefix == [85, 90, 94, 99, 103])
+            default:
+                break // Skip unknown forecast types silently
             }
         }
     }
@@ -360,15 +308,11 @@ class BundleReference {}
         // more than 24 hours in the future from the most recent entry
         let now = Date("2025-04-29T22:00:00.000Z")!
 
-        try await importer.importOrefDetermination(enactedUrl: enactedUrl, suggestedUrl: suggestedUrl, now: now)
+        try await importer.importOrefDetermination(enactedUrl: enactedUrl, suggestedUrl: suggestedUrl, now: now, in: grdb.pool)
 
-        let determinations = try await coreDataStack.fetchEntitiesAsync(
-            ofType: OrefDetermination.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "deliverAt",
-            ascending: false
-        ) as? [OrefDetermination] ?? []
+        let determinations = try await grdb.pool.read { db in
+            try OrefDeterminationRecord.fetchAll(db)
+        }
 
         #expect(determinations.isEmpty)
     }
@@ -382,15 +326,11 @@ class BundleReference {}
         let suggestedUrl = URL(filePath: suggestedPath)
 
         let now = Date("2025-04-28T20:50:00.000Z")!
-        try await importer.importOrefDetermination(enactedUrl: enactedUrl, suggestedUrl: suggestedUrl, now: now)
+        try await importer.importOrefDetermination(enactedUrl: enactedUrl, suggestedUrl: suggestedUrl, now: now, in: grdb.pool)
 
-        let determinations = try await coreDataStack.fetchEntitiesAsync(
-            ofType: OrefDetermination.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "deliverAt",
-            ascending: false
-        ) as? [OrefDetermination] ?? []
+        let determinations = try await grdb.pool.read { db in
+            try OrefDeterminationRecord.order(OrefDeterminationRecord.Columns.deliverAt.desc).fetchAll(db)
+        }
 
         #expect(determinations.count == 2) // two determinations, suggested is more recent than enacted
 

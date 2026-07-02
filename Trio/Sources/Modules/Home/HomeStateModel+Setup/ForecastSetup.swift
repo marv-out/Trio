@@ -1,28 +1,18 @@
-import CoreData
 import Foundation
 
 extension Home.StateModel {
-    // Asynchronously preprocess Forecast data in a background thread
-    func preprocessForecastData() async -> [(
-        id: UUID, forecastID: NSManagedObjectID, forecastValueIDs: [NSManagedObjectID]
-    )] {
+    /// Fetches the whole forecast tree (each forecast + its values, capped at 36) for the newest
+    /// determination in `enactedAndNonEnactedDeterminations`. Replaces the former
+    /// `fetchForecastHierarchy` → `fetchForecastObjects` → `existingObject` objectID dance and the
+    /// `SELF IN %@` prefetch N+1 workaround with a single two-level `pk` join.
+    @MainActor func preprocessForecastData() async -> [(forecast: ForecastRecord, values: [ForecastValueRecord])] {
+        guard let determinationPk = enactedAndNonEnactedDeterminations.first?.pk else {
+            debug(.default, "No determination found for forecast preprocessing")
+            return []
+        }
+
         do {
-            // Get the Determination ID on the main context
-            guard let determination = await viewContext.perform({
-                self.enactedAndNonEnactedDeterminations.first
-            }) else {
-                debug(.default, "No determination found for forecast preprocessing")
-                return []
-            }
-
-            let taskContext = CoreDataStack.shared.newTaskContext()
-            taskContext.name = "HomeStateModel.preprocessForecastData"
-
-            // Fetch complete forecast hierarchy with prefetched values
-            return try await determinationStorage.fetchForecastHierarchy(
-                for: determination.objectID,
-                in: taskContext
-            )
+            return try await determinationStorage.fetchForecastHierarchy(for: determinationPk)
         } catch {
             debug(
                 .default,
@@ -34,38 +24,23 @@ extension Home.StateModel {
 
     // Update forecast data and UI on the main thread
     @MainActor func updateForecastData() async {
-        let forecastDataIDs = await preprocessForecastData()
+        let hierarchy = await preprocessForecastData()
 
         var allForecastValues = [[Int]]()
-        var preprocessedData = [(id: UUID, forecast: Forecast, forecastValue: ForecastValue)]()
+        var preprocessedData = [(id: UUID, forecast: ForecastRecord, forecastValue: ForecastValueRecord)]()
 
-        // Prefetch all Forecasts with their forecastValues into viewContext in a single IN-query
-        // to avoid N+1 individual SELECTs when materializing via existingObject below.
-        let forecastObjectIDs = forecastDataIDs.map(\.forecastID)
-        if !forecastObjectIDs.isEmpty {
-            let prefetchRequest = NSFetchRequest<Forecast>(entityName: "Forecast")
-            prefetchRequest.predicate = NSPredicate(format: "SELF IN %@", forecastObjectIDs)
-            prefetchRequest.relationshipKeyPathsForPrefetching = ["forecastValues"]
-            prefetchRequest.returnsObjectsAsFaults = false
-            _ = try? viewContext.fetch(prefetchRequest)
-        }
+        for entry in hierarchy {
+            // One grouping id per forecast (all its values share it) — used by `ForecastView`'s ForEach.
+            let groupID = entry.forecast.id ?? UUID()
 
-        // Process prefetched data directly
-        for data in forecastDataIDs {
-            if let forecast = try? viewContext.existingObject(with: data.forecastID) as? Forecast {
-                let values = data.forecastValueIDs.compactMap {
-                    try? viewContext.existingObject(with: $0) as? ForecastValue
-                }
+            // Extract values for graph
+            let forecastValueInts = entry.values.map { Int($0.value) }
+            allForecastValues.append(forecastValueInts)
 
-                // Extract values for graph
-                let forecastValueInts = values.map { Int($0.value) }
-                allForecastValues.append(forecastValueInts)
-
-                // Add data for further processing
-                preprocessedData.append(contentsOf: values.map {
-                    (id: data.id, forecast: forecast, forecastValue: $0)
-                })
-            }
+            // Add data for further processing
+            preprocessedData.append(contentsOf: entry.values.map {
+                (id: groupID, forecast: entry.forecast, forecastValue: $0)
+            })
         }
 
         // Update UI-relevant data
