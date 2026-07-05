@@ -1,5 +1,4 @@
 import Combine
-import CoreData
 import Foundation
 
 extension BaseNightscoutManager {
@@ -29,8 +28,8 @@ extension BaseNightscoutManager {
             .store(in: &subscriptions)
     }
 
-    /// Maps Core Data "not yet uploaded to Nightscout" sets to upload pipeline requests via
-    /// NSFetchedResultsControllers. Each controller fires when un-uploaded items appear (or drop
+    /// Maps GRDB "not yet uploaded to Nightscout" counts to upload pipeline requests via
+    /// ValueObservations. Each observation fires when un-uploaded items appear (or drop
     /// out after a successful upload). We rely on the per-pipeline throttle so rapid changes
     /// don't spam Nightscout.
     func wireUploadControllers() {
@@ -72,17 +71,11 @@ extension BaseNightscoutManager {
             .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
                 self?.requestUpload(.carbs)
             })
-        glucoseUploadControllerDelegate.onContentChange = { [weak self] in
-            self?.requestUpload(.glucose)
-        }
-
-        // performFetch must run on the viewContext's queue (main).
-        Task { @MainActor in
-            do {
-                try self.glucoseUploadController.performFetch()
-            } catch {
-                debug(.nightscout, "\(DebuggingIdentifiers.failed) Failed to set up Nightscout upload controllers: \(error)")
-            }
-        }
+        // Glucose readings live in GRDB: a ValueObservation fires when the not-yet-uploaded-to-Nightscout
+        // set changes, replacing the former NSFetchedResultsController.
+        glucoseUploadObservationCancellable = GlucoseStore.observeNotYetUploadedCount(channel: .nightscout)
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                self?.requestUpload(.glucose)
+            })
     }
 }

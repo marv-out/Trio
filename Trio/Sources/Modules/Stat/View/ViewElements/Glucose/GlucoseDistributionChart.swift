@@ -2,7 +2,7 @@ import Charts
 import SwiftUI
 
 struct GlucoseDistributionChart: View {
-    let glucose: [GlucoseStored]
+    let glucose: [GlucoseRecord]
     let highLimit: Decimal
     let lowLimit: Decimal
     let units: GlucoseUnits

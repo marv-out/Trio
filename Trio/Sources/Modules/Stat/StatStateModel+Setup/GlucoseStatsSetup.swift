@@ -1,4 +1,3 @@
-import CoreData
 import Foundation
 
 /// A thread-safe value type to hold glucose data without Core Data dependencies
@@ -14,8 +13,6 @@ struct GlucoseDailyDistributionStats: Identifiable {
     let date: Date
     /// The time-in-range type used for calculations
     let timeInRangeType: TimeInRangeType
-    /// The original glucose readings
-    let readings: [GlucoseStored]
     /// Percentage of glucose readings below 54 mg/dL
     let veryLowPct: Double
     /// Percentage of glucose readings in the [54 – lowLimit] mg/dL range
@@ -32,7 +29,6 @@ struct GlucoseDailyDistributionStats: Identifiable {
     init(
         date: Date,
         timeInRangeType: TimeInRangeType,
-        readings: [GlucoseStored] = [GlucoseStored](),
         veryLowPct: Double = 0,
         lowPct: Double = 0,
         inSmallRangePct: Double = 0,
@@ -42,7 +38,6 @@ struct GlucoseDailyDistributionStats: Identifiable {
     ) {
         self.date = date
         self.timeInRangeType = timeInRangeType
-        self.readings = readings
         self.veryLowPct = veryLowPct
         self.lowPct = lowPct
         self.inSmallRangePct = inSmallRangePct
@@ -57,8 +52,6 @@ struct GlucoseDailyPercentileStats: Identifiable {
     let id = UUID()
     /// The date this data represents
     let date: Date
-    /// The original glucose readings
-    let readings: [GlucoseStored]
     /// Minimum glucose value
     let minimum: Double
     /// 10th percentile glucose value
@@ -76,7 +69,6 @@ struct GlucoseDailyPercentileStats: Identifiable {
 
     init(
         date: Date,
-        readings: [GlucoseStored] = [GlucoseStored](),
         minimum: Double = 0,
         percentile10: Double = 0,
         percentile25: Double = 0,
@@ -86,7 +78,6 @@ struct GlucoseDailyPercentileStats: Identifiable {
         maximum: Double = 0
     ) {
         self.date = date
-        self.readings = readings
         self.minimum = minimum
         self.percentile10 = percentile10
         self.percentile25 = percentile25
@@ -98,26 +89,26 @@ struct GlucoseDailyPercentileStats: Identifiable {
 }
 
 extension Stat.StateModel {
-    /// Performs setup for both percentile and distribution glucose statistics from provided IDs
+    /// Performs setup for both percentile and distribution glucose statistics from provided records
     ///
     /// This method optimizes performance by:
     /// 1. Computing both percentile and distribution statistics concurrently
     /// 2. Creating lookup caches for both stat types simultaneously
     ///
-    /// - Parameter ids: Array of NSManagedObjectIDs for glucose readings
-    func setupGlucoseStats(with ids: [NSManagedObjectID]) async {
+    /// - Parameter records: Array of GlucoseRecords for glucose readings
+    func setupGlucoseStats(with records: [GlucoseRecord]) async {
         // Get dates for the past 90 days
         let dates = getDates()
 
         // Calculate both types of statistics concurrently
         async let percentileStats = calculateDailyPercentileStats(
             for: dates,
-            glucoseIDs: ids
+            glucoseRecords: records
         )
 
         async let distributionStats = calculateDailyDistributionStats(
             for: dates,
-            glucoseIDs: ids,
+            glucoseRecords: records,
             highLimit: highLimit,
             timeInRangeType: timeInRangeType
         )
@@ -154,11 +145,11 @@ extension Stat.StateModel {
     /// Processes glucose readings for a set of dates in a thread-safe manner
     /// - Parameters:
     ///   - dates: Array of dates to process data for
-    ///   - glucoseIDs: Array of NSManagedObjectIDs for glucose readings
+    ///   - glucoseRecords: Array of GlucoseRecords (already value types, thread-safe)
     /// - Returns: Array of (date, readings) tuples containing filtered readings for each date
     private func processGlucoseReadingsForDates(
         _ dates: [Date],
-        glucoseIDs: [NSManagedObjectID]
+        glucoseRecords: [GlucoseRecord]
     ) async -> [(date: Date, readings: [GlucoseReading])] {
         let calendar = Calendar.current
 
@@ -167,17 +158,10 @@ extension Stat.StateModel {
             return []
         }
 
-        // Extract the thread-safe glucose readings
-        let privateContext = CoreDataStack.shared.newTaskContext()
-
-        // Map into Sendable struct
-        let glucoseReadings: [GlucoseReading] = await privateContext.perform {
-            // Get NSManagedObject on private context and map into GlucoseReading struct
-            glucoseIDs.compactMap { id -> GlucoseReading? in
-                guard let reading = privateContext.object(with: id) as? GlucoseStored,
-                      let date = reading.date else { return nil }
-                return GlucoseReading(value: Int(reading.glucose), date: date)
-            }
+        // GlucoseRecord is a value type — no context round-trip needed
+        let glucoseReadings: [GlucoseReading] = glucoseRecords.compactMap { record -> GlucoseReading? in
+            guard let date = record.date else { return nil }
+            return GlucoseReading(value: Int(record.glucose), date: date)
         }
 
         return await withTaskGroup(of: (date: Date, readings: [GlucoseReading]).self) { group in
@@ -237,13 +221,9 @@ extension Stat.StateModel {
         let highPct = totalReadings > 0 ? Double(highReadings) / totalReadings * 100 : 0
         let veryHighPct = totalReadings > 0 ? Double(veryHighReadings) / totalReadings * 100 : 0
 
-        // Create empty managed object array since we don't need the actual Core Data objects
-        let emptyStoredArray: [GlucoseStored] = []
-
         return GlucoseDailyDistributionStats(
             date: date,
             timeInRangeType: timeInRangeType,
-            readings: emptyStoredArray,
             veryLowPct: veryLowPct,
             lowPct: lowPct,
             inSmallRangePct: inSmallRangePct,
@@ -287,7 +267,6 @@ extension Stat.StateModel {
         // Calculate all percentiles concurrently
         return GlucoseDailyPercentileStats(
             date: date,
-            readings: [],
             minimum: glucoseValues.first ?? 0,
             percentile10: calculatePercentile(0.10),
             percentile25: calculatePercentile(0.25),
@@ -300,14 +279,14 @@ extension Stat.StateModel {
 
     func calculateDailyDistributionStats(
         for dates: [Date],
-        glucoseIDs: [NSManagedObjectID],
+        glucoseRecords: [GlucoseRecord],
         highLimit: Decimal,
         timeInRangeType: TimeInRangeType
     ) async -> [GlucoseDailyDistributionStats] {
         // Process readings for each date
         let processedData = await processGlucoseReadingsForDates(
             dates,
-            glucoseIDs: glucoseIDs
+            glucoseRecords: glucoseRecords
         )
 
         // Transform into distribution stats
@@ -327,12 +306,12 @@ extension Stat.StateModel {
 
     func calculateDailyPercentileStats(
         for dates: [Date],
-        glucoseIDs: [NSManagedObjectID]
+        glucoseRecords: [GlucoseRecord]
     ) async -> [GlucoseDailyPercentileStats] {
         // Process readings for each date
         let processedData = await processGlucoseReadingsForDates(
             dates,
-            glucoseIDs: glucoseIDs
+            glucoseRecords: glucoseRecords
         )
 
         // Transform into percentile stats

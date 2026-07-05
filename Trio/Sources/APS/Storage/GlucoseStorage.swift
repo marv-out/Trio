@@ -1,7 +1,7 @@
 import AVFAudio
 import Combine
-import CoreData
 import Foundation
+import GRDB
 import LoopKit
 import SwiftDate
 import SwiftUI
@@ -25,7 +25,7 @@ protocol GlucoseStorage {
     func getManualGlucoseNotYetUploadedToTidepool() async throws -> [StoredGlucoseSample]
 //    func getGlucoseStatus() async throws -> GlucoseStatus? // FIXME: prepared for later use
     var alarm: GlucoseAlarm? { get }
-    func deleteGlucose(_ treatmentObjectID: NSManagedObjectID) async
+    func deleteGlucose(_ pk: Int64) async
 }
 
 final class BaseGlucoseStorage: GlucoseStorage, Injectable {
@@ -45,10 +45,7 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
         static let minimumGlucose: Int = 39
     }
 
-    private let makeContext: () -> NSManagedObjectContext
-
-    init(resolver: Resolver, contextProvider: (() -> NSManagedObjectContext)? = nil) {
-        makeContext = contextProvider ?? { CoreDataStack.shared.newTaskContext() }
+    init(resolver: Resolver) {
         injectServices(resolver)
     }
 
@@ -63,7 +60,7 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
         return formatter
     }
 
-    /// Backfills glucose values and stores in CoreData
+    /// Backfills glucose values and stores them in GRDB.
     ///
     /// CGM managers will sometimes backfill glucose readings. To handle these backfilled values
     /// correctly, we need some logic to handle a few cases:
@@ -77,69 +74,46 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
     ///  it isn't within 3.5 minutes of an existing glucose reading, which is simple but not perfect.
     ///  But since this is a corner case that really shouldn't happen often, it's good enough.
     func backfillGlucose(_ glucose: [BloodGlucose]) async throws {
-        let context = makeContext()
-        context.name = "backfillGlucose"
+        try await backfillGlucose(glucose, in: nil)
+    }
+
+    /// Pool-injecting variant for tests (mirrors `BaseCarbsStorage.storeCarbs(…, in:)`): `pool == nil`
+    /// uses the shared GRDB store; tests pass an in-memory pool.
+    func backfillGlucose(_ glucose: [BloodGlucose], in pool: DatabasePool?) async throws {
         let clamped = clampToMinimum(glucose)
 
-        try await context.perform {
-            // remove already deleted glucose values
-            let withoutDeletedGlucose = self.filterGlucoseValues(
-                clamped,
-                fetchRequest: DeletedGlucoseStored.fetchRequest(),
-                timeBuffer: 1,
-                context: context
-            )
+        // Remove already-deleted glucose values (tombstones), 1s buffer.
+        let withoutDeletedGlucose = try await filterAgainstDeletedTombstones(clamped, timeBuffer: 1, pool: pool)
 
-            // check for a 3.5 minute difference between existing values
-            let filteredGlucose = self.filterGlucoseValues(
-                withoutDeletedGlucose,
-                fetchRequest: GlucoseStored.fetchRequest(),
-                timeBuffer: 3.5 * 60,
-                context: context
-            )
+        // Check for a 3.5 minute difference between existing values.
+        let filteredGlucose = try await filterAgainstExistingGlucose(
+            withoutDeletedGlucose,
+            timeBuffer: 3.5 * 60,
+            pool: pool
+        )
 
-            guard !filteredGlucose.isEmpty else { return }
+        guard !filteredGlucose.isEmpty else { return }
 
-            do {
-                // Store glucose values in Core Data
-                try self.storeGlucoseInCoreData(filteredGlucose, context: context)
-            } catch {
-                throw CoreDataError.creationError(
-                    function: #function,
-                    file: #fileID
-                )
-            }
-        }
+        try await GlucoseStore.batchInsert(filteredGlucose.map(makeGlucoseRecord), pool: pool)
+        updateSubject.send()
     }
 
     func storeGlucose(_ glucose: [BloodGlucose]) async throws {
-        let context = makeContext()
-        context.name = "storeGlucose"
+        try await storeGlucose(glucose, in: nil)
+    }
+
+    func storeGlucose(_ glucose: [BloodGlucose], in pool: DatabasePool?) async throws {
         let clamped = clampToMinimum(glucose)
 
-        try await context.perform {
-            // Get new glucose values that don't exist yet
-            let newGlucose = self.filterGlucoseValues(
-                clamped,
-                fetchRequest: GlucoseStored.fetchRequest(),
-                timeBuffer: 1,
-                context: context
-            )
-            guard !newGlucose.isEmpty else { return }
+        // Get new glucose values that don't exist yet (1s buffer).
+        let newGlucose = try await filterAgainstExistingGlucose(clamped, timeBuffer: 1, pool: pool)
+        guard !newGlucose.isEmpty else { return }
 
-            do {
-                // Store glucose values in Core Data
-                try self.storeGlucoseInCoreData(newGlucose, context: context)
-            } catch {
-                throw CoreDataError.creationError(
-                    function: #function,
-                    file: #fileID
-                )
-            }
+        try await GlucoseStore.batchInsert(newGlucose.map(makeGlucoseRecord), pool: pool)
+        updateSubject.send()
 
-            // Store CGM state if needed
-            self.storeCGMState(clamped)
-        }
+        // Store CGM state if needed (JSON FileStorage, unchanged).
+        storeCGMState(clamped)
     }
 
     /// Clamps CGM-sourced glucose readings to a minimum of `Config.minimumGlucose`
@@ -166,41 +140,50 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
         }
     }
 
-    /// filter out duplicate CGM readings using matching timestamps
+    /// Filters out incoming readings that are within `timeBuffer` of an existing `glucoseStored` row.
+    private func filterAgainstExistingGlucose(
+        _ glucose: [BloodGlucose],
+        timeBuffer: TimeInterval,
+        pool: DatabasePool?
+    ) async throws -> [BloodGlucose] {
+        guard let range = bufferedRange(for: glucose, timeBuffer: timeBuffer) else { return glucose }
+        let existingDates = try await GlucoseStore.existingDates(from: range.from, to: range.to, pool: pool)
+        return filterGlucoseValues(glucose, existingDates: existingDates, timeBuffer: timeBuffer)
+    }
+
+    /// Filters out incoming readings that are within `timeBuffer` of a `deletedGlucoseStored` tombstone.
+    private func filterAgainstDeletedTombstones(
+        _ glucose: [BloodGlucose],
+        timeBuffer: TimeInterval,
+        pool: DatabasePool?
+    ) async throws -> [BloodGlucose] {
+        guard let range = bufferedRange(for: glucose, timeBuffer: timeBuffer) else { return glucose }
+        let existingDates = try await DeletedGlucoseStore.existingDates(from: range.from, to: range.to, pool: pool)
+        return filterGlucoseValues(glucose, existingDates: existingDates, timeBuffer: timeBuffer)
+    }
+
+    /// The `[first - buffer, last + buffer]` window covering the incoming readings, or `nil` if empty.
+    private func bufferedRange(for glucose: [BloodGlucose], timeBuffer: TimeInterval) -> (from: Date, to: Date)? {
+        let datesToCheck = glucose.map(\.dateString).sorted()
+        guard let first = datesToCheck.first, let last = datesToCheck.last else { return nil }
+        return (first.addingTimeInterval(-timeBuffer), last.addingTimeInterval(timeBuffer))
+    }
+
+    /// Removes readings within `timeBuffer` of any `existingDates`.
     ///
-    /// This function will fetch dates from the `fetchRequest` and remove any glucose
-    /// values that are within `timeBuffer` of the fetched dates. This logic is useful for
-    /// deduplication checks or removing deleted CGM values from a list of backfilled readings.
+    /// ⚠️ **Precision (Step 11 lesson).** `existingDates` are the DB-stored (millisecond) dates, and the
+    /// comparison is a *proximity* match against them — not exact `Date` equality. A raw incoming `Date`
+    /// carries sub-millisecond components the round-tripped DB value does not, so an exact-equality key
+    /// (in memory) would miss duplicates; the buffer comparison against DB-stored dates is robust.
+    ///
+    /// This is an inefficient filtering algorithm, but the time spans are short and duplicates are rare,
+    /// so in the common case there won't be any existing dates.
     private func filterGlucoseValues(
         _ glucose: [BloodGlucose],
-        fetchRequest: NSFetchRequest<NSFetchRequestResult>,
-        timeBuffer: TimeInterval,
-        context: NSManagedObjectContext
+        existingDates: [Date],
+        timeBuffer: TimeInterval
     ) -> [BloodGlucose] {
-        let datesToCheck = glucose.map(\.dateString).sorted()
-        guard let firstDate = datesToCheck.first.map({ $0.addingTimeInterval(-timeBuffer) }),
-              let lastDate = datesToCheck.last.map({ $0.addingTimeInterval(timeBuffer) })
-        else {
-            return glucose
-        }
-        fetchRequest.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-            NSPredicate(format: "date >= %@", firstDate as NSDate),
-            NSPredicate(format: "date <= %@", lastDate as NSDate)
-        ])
-        fetchRequest.propertiesToFetch = ["date"]
-        fetchRequest.resultType = .dictionaryResultType
-
-        var existingDates = [Date]()
-        do {
-            let results = try context.fetch(fetchRequest) as? [NSDictionary]
-            existingDates = results?.compactMap({ $0["date"] as? Date }) ?? []
-        } catch {
-            debugPrint("Failed to fetch existing glucose dates: \(error)")
-        }
-
-        // This is an inefficient filtering algorithm, but I'm assuming that the
-        // time spans are short and that duplicates are rare, so in the common
-        // case there won't be any existing dates.
+        guard !existingDates.isEmpty else { return glucose }
         return glucose.filter { glucose in
             for existingDate in existingDates {
                 let difference = abs(existingDate.timeIntervalSince(glucose.dateString))
@@ -212,52 +195,16 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
         }
     }
 
-    private func storeGlucoseInCoreData(_ glucose: [BloodGlucose], context: NSManagedObjectContext) throws {
-        if glucose.count > 1 {
-            try storeGlucoseBatch(glucose, context: context)
-        } else {
-            try storeGlucoseRegular(glucose, context: context)
-        }
-    }
-
-    private func storeGlucoseRegular(_ glucose: [BloodGlucose], context: NSManagedObjectContext) throws {
-        for entry in glucose {
-            let glucoseEntry = GlucoseStored(context: context)
-            configureGlucoseEntry(glucoseEntry, with: entry)
-        }
-
-        guard context.hasChanges else { return }
-        try context.save()
-    }
-
-    private func storeGlucoseBatch(_ glucose: [BloodGlucose], context: NSManagedObjectContext) throws {
-        var remainingGlucose = glucose
-        let batchInsert = NSBatchInsertRequest(
-            entity: GlucoseStored.entity(),
-            managedObjectHandler: { (managedObject: NSManagedObject) -> Bool in
-                guard let glucoseEntry = managedObject as? GlucoseStored,
-                      !remainingGlucose.isEmpty
-                else {
-                    return true
-                }
-                let entry = remainingGlucose.removeFirst()
-                self.configureGlucoseEntry(glucoseEntry, with: entry)
-                return false
-            }
+    /// Maps an incoming `BloodGlucose` to a fresh CGM `GlucoseRecord` (mirrors the former
+    /// `configureGlucoseEntry`): new `id`, upload flags cleared, `isManual == false`.
+    private func makeGlucoseRecord(from glucose: BloodGlucose) -> GlucoseRecord {
+        GlucoseRecord(
+            id: UUID(),
+            date: glucose.dateString,
+            glucose: Int16(glucose.glucose ?? 0),
+            direction: glucose.direction?.rawValue,
+            isManual: false
         )
-        try context.execute(batchInsert)
-        // Only send update for batch insert since regular save triggers CoreData notifications
-        updateSubject.send()
-    }
-
-    private func configureGlucoseEntry(_ entry: GlucoseStored, with glucose: BloodGlucose) {
-        entry.id = UUID()
-        entry.glucose = Int16(glucose.glucose ?? 0)
-        entry.date = glucose.dateString
-        entry.direction = glucose.direction?.rawValue
-        entry.isUploadedToNS = false
-        entry.isUploadedToHealth = false
-        entry.isUploadedToTidepool = false
     }
 
     private func storeCGMState(_ glucose: [BloodGlucose]) {
@@ -328,28 +275,22 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
     }
 
     func addManualGlucose(glucose: Int) {
-        let context = makeContext()
-        context.name = "addManualGlucose"
+        let record = GlucoseRecord(
+            id: UUID(),
+            date: Date(),
+            glucose: Int16(glucose),
+            isManual: true
+        )
 
-        context.perform {
-            let newItem = GlucoseStored(context: context)
-            newItem.id = UUID()
-            newItem.date = Date()
-            newItem.glucose = Int16(glucose)
-            newItem.isManual = true
-            newItem.isUploadedToNS = false
-            newItem.isUploadedToHealth = false
-            newItem.isUploadedToTidepool = false
-
+        Task {
             do {
-                guard context.hasChanges else { return }
-                try context.save()
-
-                // Glucose subscribers already listen to the update publisher, so call here to update glucose-related data.
-                self.updateSubject.send()
-            } catch let error as NSError {
+                try await GlucoseStore.store(record)
+                // Glucose subscribers already listen to the update publisher, so call here to update
+                // glucose-related data.
+                updateSubject.send()
+            } catch {
                 debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save manual glucose to Core Data with error: \(error)"
+                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to save manual glucose to GRDB with error: \(error)"
                 )
             }
         }
@@ -361,54 +302,21 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
     }
 
     func syncDate() -> Date {
-        let context = makeContext()
-        context.name = "syncDate"
-
-        // Optimize fetch request to only get the date
-        let fr = NSFetchRequest<NSDictionary>(entityName: "GlucoseStored")
-        fr.predicate = NSPredicate.predicateForOneDayAgo
-        fr.propertiesToFetch = ["date"]
-        fr.fetchLimit = 1
-        fr.resultType = .dictionaryResultType
-        fr.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
-
-        var fetchedDate: Date = .distantPast
-
-        context.performAndWait {
-            do {
-                if let result = try context.fetch(fr).first,
-                   let date = result["date"] as? Date
-                {
-                    fetchedDate = date
-                }
-            } catch {
-                debugPrint("Fetch error: \(DebuggingIdentifiers.failed) \(error)")
-            }
+        do {
+            return try GlucoseStore.fetchLatestDateSync() ?? .distantPast
+        } catch {
+            debugPrint("Fetch error: \(DebuggingIdentifiers.failed) \(error)")
+            return .distantPast
         }
-
-        return fetchedDate
     }
 
     func lastGlucoseDate() -> Date? {
-        let context = makeContext()
-        context.name = "lastGlucoseDate"
-
-        let fetchRequest = GlucoseStored.fetchRequest()
-        fetchRequest.predicate = NSPredicate.predicateForOneDayAgo
-        fetchRequest.sortDescriptors = [NSSortDescriptor(keyPath: \GlucoseStored.date, ascending: false)]
-        fetchRequest.fetchLimit = 1
-
-        var date: Date?
-        context.performAndWait {
-            do {
-                let results = try context.fetch(fetchRequest)
-                date = results.first?.date
-            } catch let error as NSError {
-                debug(.storage, "Fetch error: \(DebuggingIdentifiers.failed) \(error), \(error.userInfo)")
-            }
+        do {
+            return try GlucoseStore.fetchLatestDateSync()
+        } catch let error as NSError {
+            debug(.storage, "Fetch error: \(DebuggingIdentifiers.failed) \(error), \(error.userInfo)")
+            return nil
         }
-
-        return date
     }
 
     func isGlucoseFresh() -> Bool {
@@ -431,60 +339,32 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
         return filtered
     }
 
-    func fetchLatestGlucose(context: NSManagedObjectContext) throws -> GlucoseStored? {
-        let predicate = NSPredicate.predicateFor20MinAgo
-        return (try CoreDataStack.shared.fetchEntities(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: predicate,
-            key: "date",
-            ascending: false,
-            fetchLimit: 1
-        ) as? [GlucoseStored] ?? []).first
-    }
-
     // Fetch glucose that is not uploaded to Nightscout yet
     /// - Returns: Array of BloodGlucose to ensure the correct format for the NS Upload
     func getGlucoseNotYetUploadedToNightscout() async throws -> [BloodGlucose] {
-        let context = makeContext()
-        context.name = "getGlucoseNotYetUploadedToNightscout"
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.glucoseNotYetUploadedToNightscout,
-            key: "date",
-            ascending: false
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map { result in
-                if result.isManual {
-                    BloodGlucose(
-                        id: result.id?.uuidString ?? UUID().uuidString,
-                        mbg: Int(result.glucose),
-                        date: Decimal(result.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
-                        dateString: result.date ?? Date(),
-                        type: "mbg"
-                    )
-                } else {
-                    BloodGlucose(
-                        id: result.id?.uuidString ?? UUID().uuidString,
-                        sgv: Int(result.glucose),
-                        direction: BloodGlucose.Direction(from: result.direction ?? ""),
-                        date: Decimal(result.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
-                        dateString: result.date ?? Date(),
-                        unfiltered: Decimal(result.glucose),
-                        filtered: Decimal(result.glucose),
-                        noise: nil,
-                        glucose: Int(result.glucose),
-                        type: "sgv"
-                    )
-                }
+        let records = try await GlucoseStore.fetchNotYetUploaded(channel: .nightscout)
+        return records.map { record in
+            if record.isManual {
+                BloodGlucose(
+                    id: record.id?.uuidString ?? UUID().uuidString,
+                    mbg: Int(record.glucose),
+                    date: Decimal(record.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
+                    dateString: record.date ?? Date(),
+                    type: "mbg"
+                )
+            } else {
+                BloodGlucose(
+                    id: record.id?.uuidString ?? UUID().uuidString,
+                    sgv: Int(record.glucose),
+                    direction: BloodGlucose.Direction(from: record.direction ?? ""),
+                    date: Decimal(record.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
+                    dateString: record.date ?? Date(),
+                    unfiltered: Decimal(record.glucose),
+                    filtered: Decimal(record.glucose),
+                    noise: nil,
+                    glucose: Int(record.glucose),
+                    type: "sgv"
+                )
             }
         }
     }
@@ -499,328 +379,79 @@ final class BaseGlucoseStorage: GlucoseStorage, Injectable {
         return Array(Set(allValuesSet).subtracting(Set(alreadyUploadedValues)))
     }
 
-    // Fetch glucose that is not uploaded to Nightscout yet
-    /// - Returns: Array of BloodGlucose to ensure the correct format for the NS Upload
+    // Fetch glucose that is not uploaded to Apple Health yet
+    /// - Returns: Array of BloodGlucose to ensure the correct format for the Health Upload
     func getGlucoseNotYetUploadedToHealth() async throws -> [BloodGlucose] {
-        let context = makeContext()
-        context.name = "getGlucoseNotYetUploadedToHealth"
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.glucoseNotYetUploadedToHealth,
-            key: "date",
-            ascending: false
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map { result in
-                BloodGlucose(
-                    id: result.id?.uuidString ?? UUID().uuidString,
-                    sgv: Int(result.glucose),
-                    direction: BloodGlucose.Direction(from: result.direction ?? ""),
-                    date: Decimal(result.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
-                    dateString: result.date ?? Date(),
-                    unfiltered: Decimal(result.glucose),
-                    filtered: Decimal(result.glucose),
-                    noise: nil,
-                    glucose: Int(result.glucose)
-                )
-            }
-        }
+        let records = try await GlucoseStore.fetchNotYetUploaded(channel: .health)
+        return records.map(makeSgvBloodGlucose)
     }
 
-    // Fetch manual glucose that is not uploaded to Nightscout yet
-    /// - Returns: Array of NightscoutTreatment to ensure the correct format for the NS Upload
+    // Fetch manual glucose that is not uploaded to Apple Health yet
     func getManualGlucoseNotYetUploadedToHealth() async throws -> [BloodGlucose] {
-        let context = makeContext()
-        context.name = "getManualGlucoseNotYetUploadedToHealth"
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.manualGlucoseNotYetUploadedToHealth,
-            key: "date",
-            ascending: false
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map { result in
-                BloodGlucose(
-                    id: result.id?.uuidString ?? UUID().uuidString,
-                    sgv: Int(result.glucose),
-                    direction: BloodGlucose.Direction(from: result.direction ?? ""),
-                    date: Decimal(result.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
-                    dateString: result.date ?? Date(),
-                    unfiltered: Decimal(result.glucose),
-                    filtered: Decimal(result.glucose),
-                    noise: nil,
-                    glucose: Int(result.glucose)
-                )
-            }
-        }
+        let records = try await GlucoseStore.fetchNotYetUploaded(channel: .health, manualOnly: true)
+        return records.map(makeSgvBloodGlucose)
     }
 
     // Fetch glucose that is not uploaded to Tidepool yet
     /// - Returns: Array of StoredGlucoseSample to ensure the correct format for Tidepool upload
     func getGlucoseNotYetUploadedToTidepool() async throws -> [StoredGlucoseSample] {
-        let context = makeContext()
-        context.name = "getGlucoseNotYetUploadedToTidepool"
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.glucoseNotYetUploadedToTidepool,
-            key: "date",
-            ascending: false
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map { result in
-                BloodGlucose(
-                    id: result.id?.uuidString ?? UUID().uuidString,
-                    sgv: Int(result.glucose),
-                    direction: BloodGlucose.Direction(from: result.direction ?? ""),
-                    date: Decimal(result.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
-                    dateString: result.date ?? Date(),
-                    unfiltered: Decimal(result.glucose),
-                    filtered: Decimal(result.glucose),
-                    noise: nil,
-                    glucose: Int(result.glucose)
-                )
-            }
-            .map { $0.convertStoredGlucoseSample(isManualGlucose: false) }
-        }
+        let records = try await GlucoseStore.fetchNotYetUploaded(channel: .tidepool)
+        return records.map(makeSgvBloodGlucose).map { $0.convertStoredGlucoseSample(isManualGlucose: false) }
     }
 
     // Fetch manual glucose that is not uploaded to Tidepool yet
     /// - Returns: Array of StoredGlucoseSample to ensure the correct format for the Tidepool upload
     func getManualGlucoseNotYetUploadedToTidepool() async throws -> [StoredGlucoseSample] {
-        let context = makeContext()
-        context.name = "getManualGlucoseNotYetUploadedToTidepool"
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.manualGlucoseNotYetUploadedToTidepool,
-            key: "date",
-            ascending: false
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map { result in
-                BloodGlucose(
-                    id: result.id?.uuidString ?? UUID().uuidString,
-                    sgv: Int(result.glucose),
-                    direction: BloodGlucose.Direction(from: result.direction ?? ""),
-                    date: Decimal(result.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
-                    dateString: result.date ?? Date(),
-                    unfiltered: Decimal(result.glucose),
-                    filtered: Decimal(result.glucose),
-                    noise: nil,
-                    glucose: Int(result.glucose)
-                )
-            }.map { $0.convertStoredGlucoseSample(isManualGlucose: true) }
-        }
+        let records = try await GlucoseStore.fetchNotYetUploaded(channel: .tidepool, manualOnly: true)
+        return records.map(makeSgvBloodGlucose).map { $0.convertStoredGlucoseSample(isManualGlucose: true) }
     }
 
-    // FIXME: use this after we know oref-swift is good
-//    /// Fetches the most recent glucose readings from Core Data, filters and smooths them,
-//    /// and computes rolling delta statistics (last, short-term, and long-term).
-//    ///
-//    /// Mirrors JavaScript oref `glucose-get-last.js` logic.
-//    ///
-//    /// - Returns: A `GlucoseStatus` containing:
-//    ///   - `glucose`: the most recent glucose value (mg/dL),
-//    ///   - `delta`: the 5-minute delta (mg/dL per 5m),
-//    ///   - `shortAvgDelta`: the average delta over ~5–15 minutes,
-//    ///   - `longAvgDelta`: the average delta over ~20–40 minutes,
-//    ///   - `noise`: the CGM noise level (if any),
-//    ///   - `date`: the timestamp of the “now” reading,
-//    ///   - `lastCalIndex`: index of the last calibration record (always `nil` here),
-//    ///   - `device`: the source device string.
-//    ///
-//    /// - Throws: Any `CoreDataError` or other error encountered during fetch or context work.
-//    /// - Returns: `nil` if no valid glucose readings are found in the past day.
-//    public func getGlucoseStatus() async throws -> GlucoseStatus? {
-//        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-//            ofType: GlucoseStored.self,
-//            onContext: context,
-//            predicate: NSPredicate(
-//                format: "date >= %@ AND isManual == %@",
-//                Date.oneDayAgoInMinutes as NSDate,
-//                false as NSNumber
-//            ),
-//            key: "date",
-//            ascending: false
-//        )
-//
-//        guard let stored = results as? [GlucoseStored], !stored.isEmpty else {
-//            return nil
-//        }
-//
-//        let validReadings: [BloodGlucose] = await context.perform {
-//            stored.compactMap { entry in
-//                BloodGlucose(
-//                    _id: entry.id?.uuidString ?? UUID().uuidString,
-//                    sgv: Int(entry.glucose),
-//                    direction: BloodGlucose.Direction(from: entry.direction ?? ""),
-//                    date: Decimal(entry.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
-//                    dateString: entry.date ?? Date(),
-//                    unfiltered: Decimal(entry.glucose),
-//                    filtered: Decimal(entry.glucose),
-//                    noise: nil,
-//                    glucose: Int(entry.glucose),
-//                    type: "sgv"
-//                )
-//            }
-//        }
-//
-//        guard !validReadings.isEmpty else {
-//            return nil
-//        }
-//
-//        // Sort descending (newest first)
-//        let sorted = validReadings.sorted { $0.date > $1.date }
-//
-//        let mostRecentGlucose = sorted[0]
-//        var mostRecentGlucoseReading: Int = mostRecentGlucose.glucose!
-//        var mostRecentGlucoseDate: Date = mostRecentGlucose.dateString
-//
-//        var lastDeltas: [Decimal] = []
-//        var shortDeltas: [Decimal] = []
-//        var longDeltas: [Decimal] = []
-//
-//        // Walk older entries to compute deltas
-//        for entry in sorted.dropFirst() {
-//            // JS oref has logic here around skipping calibration readings.
-//            // We never calibration record (never happens here, since type=="sgv")
-//            // so we omit this check
-//
-//            // only use readings >38 mg/dL (to skip code values, <39)
-//            guard let glucose = entry.glucose, glucose > 38 else { continue }
-//
-//            let minutesAgo = mostRecentGlucoseDate.timeIntervalSince(entry.dateString) / 60
-//            guard minutesAgo != 0 else { continue }
-//            // compute mg/dL per 5 m as a Decimal:
-//            let change = Decimal(mostRecentGlucoseReading - glucose)
-//            let avgDelta = (change / Decimal(minutesAgo)) * Decimal(5)
-//
-//            // very-recent (<2.5 m) smooths "now"
-//            if minutesAgo > -2, minutesAgo <= 2.5 {
-//                mostRecentGlucoseReading = (mostRecentGlucoseReading + glucose) / 2
-//                mostRecentGlucoseDate = Date(
-//                    timeIntervalSince1970: (
-//                        mostRecentGlucoseDate.timeIntervalSince1970 + entry.dateString
-//                            .timeIntervalSince1970
-//                    ) / 2
-//                )
-//            }
-//            // short window (~5–15 m)
-//            else if minutesAgo > 2.5, minutesAgo <= 17.5 {
-//                shortDeltas.append(avgDelta)
-//                if minutesAgo < 7.5 {
-//                    lastDeltas.append(avgDelta)
-//                }
-//            }
-//            // long window (~20–40 m)
-//            else if minutesAgo > 17.5, minutesAgo < 42.5 {
-//                longDeltas.append(avgDelta)
-//            }
-//        }
-//
-//        // compute means (or zero)
-//        let lastDelta: Decimal = lastDeltas.mean
-//        let shortAvg: Decimal = shortDeltas.mean
-//        let longAvg: Decimal = longDeltas.mean
-//
-//        return GlucoseStatus(
-//            delta: lastDelta.rounded(toPlaces: 2),
-//            glucose: Decimal(mostRecentGlucoseReading),
-//            noise: Int(sorted[0].noise ?? 0),
-//            shortAvgDelta: shortAvg.rounded(toPlaces: 2),
-//            longAvgDelta: longAvg.rounded(toPlaces: 2),
-//            date: mostRecentGlucoseDate,
-//            lastCalIndex: nil,
-//            device: settingsManager.settings.cgm.rawValue
-//        )
-//    }
+    /// Maps a `GlucoseRecord` to the `sgv`-shaped `BloodGlucose` used by the Health / Tidepool uploads.
+    private func makeSgvBloodGlucose(from record: GlucoseRecord) -> BloodGlucose {
+        BloodGlucose(
+            id: record.id?.uuidString ?? UUID().uuidString,
+            sgv: Int(record.glucose),
+            direction: BloodGlucose.Direction(from: record.direction ?? ""),
+            date: Decimal(record.date?.timeIntervalSince1970 ?? Date().timeIntervalSince1970) * 1000,
+            dateString: record.date ?? Date(),
+            unfiltered: Decimal(record.glucose),
+            filtered: Decimal(record.glucose),
+            noise: nil,
+            glucose: Int(record.glucose)
+        )
+    }
 
-    func deleteGlucose(_ treatmentObjectID: NSManagedObjectID) async {
-        let context = makeContext()
-        context.name = "deleteGlucose"
-        context.transactionAuthor = "deleteGlucose"
-
-        await context.perform {
-            do {
-                let result = try context.existingObject(with: treatmentObjectID) as? GlucoseStored
-
-                guard let glucoseToDelete = result else {
-                    debugPrint("Data Table State: \(#function) \(DebuggingIdentifiers.failed) glucose not found in core data")
-                    return
-                }
-
-                // Create a new DeletedGlucoseStored object and copy the properties
-                if let date = glucoseToDelete.date {
-                    let deletedEntry = DeletedGlucoseStored(context: context)
-                    deletedEntry.date = date
-                    deletedEntry.glucose = glucoseToDelete.glucose
-                    deletedEntry.isManualGlucoseEntry = glucoseToDelete.isManual
-                }
-
-                context.delete(glucoseToDelete)
-
-                guard context.hasChanges else { return }
-                try context.save()
-                debugPrint("\(#file) \(#function) \(DebuggingIdentifiers.succeeded) deleted glucose from core data")
-            } catch {
-                debugPrint(
-                    "\(#file) \(#function) \(DebuggingIdentifiers.failed) error while deleting glucose from core data: \(error)"
-                )
-            }
+    func deleteGlucose(_ pk: Int64) async {
+        do {
+            try await GlucoseStore.delete(pk: pk)
+            updateSubject.send()
+            debugPrint("\(#file) \(#function) \(DebuggingIdentifiers.succeeded) deleted glucose from GRDB")
+        } catch {
+            debugPrint(
+                "\(#file) \(#function) \(DebuggingIdentifiers.failed) error while deleting glucose from GRDB: \(error)"
+            )
         }
     }
 
     var alarm: GlucoseAlarm? {
-        let context = makeContext()
-        context.name = "alarm"
+        /// glucose can not be older than 20 minutes due to the fetch window
+        do {
+            guard let glucose = try GlucoseStore.fetchLatestSync() else { return nil }
 
-        /// glucose can not be older than 20 minutes due to the predicate in the fetch request
-        return context.performAndWait {
-            do {
-                guard let glucose = try fetchLatestGlucose(context: context) else { return nil }
+            let glucoseValue = glucose.glucose
 
-                let glucoseValue = glucose.glucose
-
-                if Decimal(glucoseValue) <= settingsManager.settings.lowGlucose {
-                    return .low
-                }
-
-                if Decimal(glucoseValue) >= settingsManager.settings.highGlucose {
-                    return .high
-                }
-
-                return nil
-            } catch {
-                debugPrint("Error fetching latest glucose: \(error)")
-                return nil
+            if Decimal(glucoseValue) <= settingsManager.settings.lowGlucose {
+                return .low
             }
+
+            if Decimal(glucoseValue) >= settingsManager.settings.highGlucose {
+                return .high
+            }
+
+            return nil
+        } catch {
+            debugPrint("Error fetching latest glucose: \(error)")
+            return nil
         }
     }
 }

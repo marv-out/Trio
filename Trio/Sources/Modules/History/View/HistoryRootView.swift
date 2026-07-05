@@ -1,4 +1,3 @@
-import CoreData
 import SwiftUI
 import Swinject
 
@@ -18,15 +17,10 @@ extension History {
         @State var selectedTreatmentTypes: Set<TreatmentType> = Set(TreatmentType.allCases)
 
         @Environment(\.colorScheme) var colorScheme
-        @Environment(\.managedObjectContext) var context
         @Environment(AppState.self) var appState
 
-        @FetchRequest(
-            entity: GlucoseStored.entity(),
-            sortDescriptors: [NSSortDescriptor(keyPath: \GlucoseStored.date, ascending: false)],
-            predicate: NSPredicate.predicateForOneDayAgo,
-            animation: .bouncy
-        ) var glucoseStored: FetchedResults<GlucoseStored>
+        // Glucose readings now live in GRDB; `state.glucoseStored` is kept current via
+        // ValueObservation (see HistoryStateModel), sorted newest-first.
 
         // Pump events (incl. boluses + temp basals) now live in GRDB; `state.pumpEventStored` is kept
         // current via ValueObservation (see HistoryStateModel), sorted newest-first.
@@ -66,7 +60,7 @@ extension History {
 
                     // Show custom progress view
                     /// don't show it if glucose is stale as it will block the UI
-                    if state.waitForSuggestion && state.isGlucoseDataFresh(glucoseStored.first?.date) {
+                    if state.waitForSuggestion && state.isGlucoseDataFresh(state.glucoseStored.first?.date) {
                         CustomProgressView(text: progressText.displayName)
                     }
                 })

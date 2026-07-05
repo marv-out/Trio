@@ -440,9 +440,9 @@ extension Notification.Name {
     }
 
     private func purgeOldNSManagedObjects() async throws {
-        async let glucoseDeletion: () = coreDataStack.batchDeleteOlderThan(GlucoseStored.self, dateKey: "date", days: 90)
-        async let archivedGlucoseDeletion: () = coreDataStack
-            .batchDeleteOlderThan(DeletedGlucoseStored.self, dateKey: "date", days: 90)
+        // Glucose (+ its deleted-reading tombstones) now live in GRDB.
+        async let glucoseDeletion: () = GlucoseStore.deleteOlderThan(days: 90)
+        async let archivedGlucoseDeletion: () = DeletedGlucoseStore.deleteOlderThan(days: 90)
         // Pump events now live in GRDB; the 90-day prune cascades to their bolus / temp-basal children
         // via the `ON DELETE CASCADE` foreign keys (the old parent/child batch deletes are gone).
         async let pumpEventDeletion: () = PumpEventStore.deleteOlderThan(days: 90)

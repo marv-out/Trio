@@ -1,4 +1,3 @@
-import CoreData
 import Foundation
 
 /// Represents statistical values for glucose readings grouped by hour of the day.
@@ -72,68 +71,55 @@ extension Stat.StateModel {
     /// - A dark blue area for the interquartile range (25th-75th percentile)
     /// - A light blue area for the wider range (10th-90th percentile)
     /// - A solid blue line for the median
-    func calculateHourlyStatsForGlucoseAreaChart(from ids: [NSManagedObjectID]) async {
-        let taskContext = CoreDataStack.shared.newTaskContext()
-
+    func calculateHourlyStatsForGlucoseAreaChart(from records: [GlucoseRecord]) async {
         let calendar = Calendar.current
 
-        let stats = await taskContext.perform {
-            // Convert IDs to GlucoseStored objects using the context
-            let readings = ids.compactMap { id -> GlucoseStored? in
-                do {
-                    return try taskContext.existingObject(with: id) as? GlucoseStored
-                } catch {
-                    debugPrint("\(DebuggingIdentifiers.failed) Error fetching glucose: \(error)")
-                    return nil
-                }
-            }
+        // GlucoseRecord is a value type — no context round-trip needed
+        // Group readings by hour of day (0-23)
+        // Example: [8: [reading1, reading2], 9: [reading3, reading4, reading5], ...]
+        let groupedByHour = Dictionary(grouping: records) { record in
+            calendar.component(.hour, from: record.date ?? Date())
+        }
 
-            // Group readings by hour of day (0-23)
-            // Example: [8: [reading1, reading2], 9: [reading3, reading4, reading5], ...]
-            let groupedByHour = Dictionary(grouping: readings) { reading in
-                calendar.component(.hour, from: reading.date ?? Date())
-            }
+        // Process each hour of the day (0-23)
+        let stats = (0 ... 23).map { hour in
+            // Get all readings for this hour (or empty if none)
+            let hourRecords = groupedByHour[hour] ?? []
 
-            // Process each hour of the day (0-23)
-            return (0 ... 23).map { hour in
-                // Get all readings for this hour (or empty if none)
-                let readings = groupedByHour[hour] ?? []
+            // Extract and sort glucose values for percentile calculations
+            // Example: [100, 120, 130, 140, 150, 160, 180]
+            let values = hourRecords.map { Double($0.glucose) }.sorted()
+            let count = Double(values.count)
 
-                // Extract and sort glucose values for percentile calculations
-                // Example: [100, 120, 130, 140, 150, 160, 180]
-                let values = readings.map { Double($0.glucose) }.sorted()
-                let count = Double(values.count)
-
-                // Handle hours with no readings
-                guard !values.isEmpty else {
-                    return HourlyStats(
-                        hour: hour,
-                        median: 0,
-                        percentile25: 0,
-                        percentile75: 0,
-                        percentile10: 0,
-                        percentile90: 0
-                    )
-                }
-
-                // Calculate median
-                // For even count: average of two middle values
-                // For odd count: middle value
-                let median = count.isEven ?
-                    (values[Int(count / 2) - 1] + values[Int(count / 2)]) / 2 :
-                    values[Int(count / 2)]
-
-                // Create statistics object with all percentiles
-                // Index calculation: multiply count by desired percentile (0.25 for 25th)
+            // Handle hours with no readings
+            guard !values.isEmpty else {
                 return HourlyStats(
                     hour: hour,
-                    median: median,
-                    percentile25: values[Int(count * 0.25)], // Lower quartile
-                    percentile75: values[Int(count * 0.75)], // Upper quartile
-                    percentile10: values[Int(count * 0.10)], // Lower whisker
-                    percentile90: values[Int(count * 0.90)] // Upper whisker
+                    median: 0,
+                    percentile25: 0,
+                    percentile75: 0,
+                    percentile10: 0,
+                    percentile90: 0
                 )
             }
+
+            // Calculate median
+            // For even count: average of two middle values
+            // For odd count: middle value
+            let median = count.isEven ?
+                (values[Int(count / 2) - 1] + values[Int(count / 2)]) / 2 :
+                values[Int(count / 2)]
+
+            // Create statistics object with all percentiles
+            // Index calculation: multiply count by desired percentile (0.25 for 25th)
+            return HourlyStats(
+                hour: hour,
+                median: median,
+                percentile25: values[Int(count * 0.25)], // Lower quartile
+                percentile75: values[Int(count * 0.75)], // Upper quartile
+                percentile10: values[Int(count * 0.10)], // Lower whisker
+                percentile90: values[Int(count * 0.90)] // Upper whisker
+            )
         }
 
         // Update stats on main thread

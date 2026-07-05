@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 struct GlucoseChartView: ChartContent {
-    let glucoseData: [GlucoseStored]
+    let glucoseData: [GlucoseRecord]
     let units: GlucoseUnits
     let highGlucose: Decimal
     let lowGlucose: Decimal
@@ -54,8 +54,7 @@ struct GlucoseChartView: ChartContent {
             }
 
             if isSmoothingEnabled, let smoothedGlucose = item.smoothedGlucose, smoothedGlucose != 0 {
-                let smoothedGlucoseForDisplay: Decimal = units == .mgdL ? smoothedGlucose.decimalValue : smoothedGlucose
-                    .decimalValue.asMmolL
+                let smoothedGlucoseForDisplay: Decimal = units == .mgdL ? smoothedGlucose : smoothedGlucose.asMmolL
                 LineMark(
                     x: .value("Time", item.date ?? Date(), unit: .second),
                     y: .value("Value", smoothedGlucoseForDisplay),
@@ -68,48 +67,49 @@ struct GlucoseChartView: ChartContent {
 }
 
 #Preview {
+    // Synthetic GRDB records for the preview (every 5 minutes, varying 120–140). Built in an explicit
+    // loop so the compiler doesn't have to type-check a large single expression.
+    func makePreviewGlucose() -> [GlucoseRecord] {
+        var records: [GlucoseRecord] = []
+        for index in 0 ..< 24 {
+            let value = Int16(120 + (index % 3) * 10)
+            let date = Date.now.addingTimeInterval(Double(index) * -300)
+            records.append(GlucoseRecord(
+                pk: Int64(index),
+                id: UUID(),
+                date: date,
+                glucose: value,
+                direction: BloodGlucose.Direction.flat.rawValue,
+                isManual: false
+            ))
+        }
+        return records
+    }
+
     struct PreviewWrapper: View {
-        @State private var previewStack: CoreDataStack? = nil
-        @State private var glucoseData: [GlucoseStored] = []
-        @State private var isLoading = true
+        let glucoseData: [GlucoseRecord]
 
         var body: some View {
             NavigationView {
-                Group {
-                    if isLoading {
-                        ProgressView("Loading data...")
-                    } else {
-                        VStack {
-                            Chart {
-                                GlucoseChartView(
-                                    glucoseData: glucoseData,
-                                    units: .mgdL,
-                                    highGlucose: 180,
-                                    lowGlucose: 70,
-                                    currentGlucoseTarget: 100,
-                                    isSmoothingEnabled: false,
-                                    glucoseColorScheme: .dynamicColor
-                                )
-                            }
-                            .frame(height: 200)
-                            .padding()
-                        }
+                VStack {
+                    Chart {
+                        GlucoseChartView(
+                            glucoseData: glucoseData,
+                            units: .mgdL,
+                            highGlucose: 180,
+                            lowGlucose: 70,
+                            currentGlucoseTarget: 100,
+                            isSmoothingEnabled: false,
+                            glucoseColorScheme: .dynamicColor
+                        )
                     }
+                    .frame(height: 200)
+                    .padding()
                 }
                 .navigationTitle("Glucose Chart")
-                .task {
-                    // Use the preview stack that's initialized asynchronously in CoreDataStack
-                    previewStack = try? await CoreDataStack.preview()
-
-                    // Now you can safely create preview data
-                    if let stack = previewStack {
-                        glucoseData = GlucoseStored.makePreviewGlucose(count: 24, provider: stack)
-                        isLoading = false
-                    }
-                }
             }
         }
     }
 
-    return PreviewWrapper()
+    return PreviewWrapper(glucoseData: makePreviewGlucose())
 }

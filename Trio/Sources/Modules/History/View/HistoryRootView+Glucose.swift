@@ -1,4 +1,3 @@
-import CoreData
 import SwiftUI
 
 extension History.RootView {
@@ -10,8 +9,8 @@ extension History.RootView {
                 Text("Time")
             }.foregroundStyle(.secondary)
 
-            if !glucoseStored.isEmpty {
-                ForEach(glucoseStored) { glucose in
+            if !state.glucoseStored.isEmpty {
+                ForEach(state.glucoseStored) { glucose in
                     HStack {
                         Text(formatGlucose(Decimal(glucose.glucose), isManual: glucose.isManual))
 
@@ -26,7 +25,7 @@ extension History.RootView {
                            let smoothedGlucose = glucose.smoothedGlucose, smoothedGlucose != 0
                         {
                             let smoothedGlucoseForDisplay = state.units == .mgdL ? smoothedGlucose
-                                .description : smoothedGlucose.decimalValue
+                                .description : smoothedGlucose
                                 .formattedAsMmolL
 
                             (

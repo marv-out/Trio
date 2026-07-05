@@ -434,6 +434,9 @@
 		BD00F0572FF6F937005D482C /* OrefDeterminationRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0552FF6F937005D482C /* OrefDeterminationRecord.swift */; };
 		BD00F05A2FFA8149005D482C /* PumpEventRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0592FFA8149005D482C /* PumpEventRecord.swift */; };
 		BD00F05B2FFA8149005D482C /* PumpEventMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0582FFA8149005D482C /* PumpEventMigration.swift */; };
+		BD00F05F2FFABDD2005D482C /* GlucoseMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F05D2FFABDD1005D482C /* GlucoseMigration.swift */; };
+		BD00F0602FFABDD2005D482C /* GlucoseRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F05E2FFABDD1005D482C /* GlucoseRecord.swift */; };
+		BD00F0612FFABDD2005D482C /* DeletedGlucoseMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F05C2FFABDD1005D482C /* DeletedGlucoseMigration.swift */; };
 		BD00F8A12FF1B100005D482C /* TempTargetRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */; };
 		BD00F8A32FF1B100005D482C /* TempTargetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */; };
 		BD04ECCE2D29952A008C5FEB /* BolusProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */; };
@@ -1398,6 +1401,9 @@
 		BD00F0552FF6F937005D482C /* OrefDeterminationRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefDeterminationRecord.swift; sourceTree = "<group>"; };
 		BD00F0582FFA8149005D482C /* PumpEventMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpEventMigration.swift; sourceTree = "<group>"; };
 		BD00F0592FFA8149005D482C /* PumpEventRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpEventRecord.swift; sourceTree = "<group>"; };
+		BD00F05C2FFABDD1005D482C /* DeletedGlucoseMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletedGlucoseMigration.swift; sourceTree = "<group>"; };
+		BD00F05D2FFABDD1005D482C /* GlucoseMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlucoseMigration.swift; sourceTree = "<group>"; };
+		BD00F05E2FFABDD1005D482C /* GlucoseRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlucoseRecord.swift; sourceTree = "<group>"; };
 		BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetRecord.swift; sourceTree = "<group>"; };
 		BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetMigration.swift; sourceTree = "<group>"; };
 		BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressOverlay.swift; sourceTree = "<group>"; };
@@ -3286,6 +3292,9 @@
 		BD00F0010000A000005D482C /* GRDB */ = {
 			isa = PBXGroup;
 			children = (
+				BD00F05C2FFABDD1005D482C /* DeletedGlucoseMigration.swift */,
+				BD00F05D2FFABDD1005D482C /* GlucoseMigration.swift */,
+				BD00F05E2FFABDD1005D482C /* GlucoseRecord.swift */,
 				BD00F0582FFA8149005D482C /* PumpEventMigration.swift */,
 				BD00F0592FFA8149005D482C /* PumpEventRecord.swift */,
 				BD00F0542FF6F937005D482C /* OrefDeterminationMigration.swift */,
@@ -4742,6 +4751,9 @@
 				BD47FDD92D8B657D0043966B /* InsulinSensitivityStepView.swift in Sources */,
 				3862CC2E2743F9F700BF832C /* CalendarManager.swift in Sources */,
 				38B4F3C325E2A20B00E76A18 /* PumpSetupView.swift in Sources */,
+				BD00F05F2FFABDD2005D482C /* GlucoseMigration.swift in Sources */,
+				BD00F0602FFABDD2005D482C /* GlucoseRecord.swift in Sources */,
+				BD00F0612FFABDD2005D482C /* DeletedGlucoseMigration.swift in Sources */,
 				38E4453C274E411700EC9A94 /* Disk+Codable.swift in Sources */,
 				58D08B322C8DF88900AA37D3 /* DummyCharts.swift in Sources */,
 				19E1F7EF29D08EBA005C8D20 /* IconConfigRootWiew.swift in Sources */,

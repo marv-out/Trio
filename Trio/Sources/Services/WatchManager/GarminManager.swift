@@ -145,19 +145,10 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
     /// How long to wait for additional settings changes before sending (seconds)
     private let settingsThrottleDuration: TimeInterval = 10
 
-    // MARK: - CoreData & Subscriptions
+    // MARK: - Subscriptions
 
-    /// Queue for handling Core Data change notifications
-    private let queue = DispatchQueue(label: "BaseGarminManager.queue", qos: .utility)
-
-    /// Publishes any changed CoreData objects that match our filters (e.g., OrefDetermination, GlucoseStored).
-    private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
-
-    /// Additional local subscriptions (separate from `cancellables`) for CoreData events.
+    /// Additional local subscriptions (separate from `cancellables`).
     private var subscriptions = Set<AnyCancellable>()
-
-    /// Represents the main (view) context for CoreData, typically used on the main thread.
-    let viewContext = CoreDataStack.shared.persistentContainer.viewContext
 
     /// Array of Garmin `IQDevice` objects currently tracked.
     /// Changing this property triggers re-registration and updates persisted devices.
@@ -191,12 +182,6 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
         previousGarminSettings = settingsManager.settings.garminSettings
 
         broadcaster.register(SettingsObserver.self, observer: self)
-
-        coreDataPublisher =
-            CoreDataStack.shared.entityChangePublisher
-                .receive(on: queue)
-                .share()
-                .eraseToAnyPublisher()
 
         // Glucose updates - start 20s fallback timer
         // When loop is working: determination arrives within ~5s, cancels timer, sends complete data
@@ -270,7 +255,7 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
 
     // MARK: - Internal Setup / Handlers
 
-    /// Sets up handlers for OrefDetermination and GlucoseStored entity changes in CoreData.
+    /// Sets up handlers for determination and glucose changes (both GRDB ValueObservations now).
     /// When these change, we re-compute the Garmin watch state and send updates to the watch.
     private func registerHandlers() {
         // OrefDetermination changes - GRDB observation replaces the Core Data sink (debounced)
@@ -284,15 +269,17 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
             )
             .store(in: &subscriptions)
 
-        // GlucoseStored changes - catches single glucose inserts that updatePublisher misses
-        // (updatePublisher only fires for batch inserts, not single glucose readings)
-        // Debounce at subscriber level to collapse multiple rapid CoreData notifications into one
-        coreDataPublisher?
-            .filteredByEntityName("GlucoseStored")
+        // Glucose changes - GRDB observation replaces the Core Data `filteredByEntityName("GlucoseStored")`
+        // sink. Subscribes to the single shared latest-glucose observation; debounced (500 ms) at the
+        // subscriber level to collapse multiple rapid writes into one Garmin update.
+        GlucoseStore.observeLatestChanged
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.handleGlucoseUpdate()
-            }
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] _ in
+                    self?.handleGlucoseUpdate()
+                }
+            )
             .store(in: &subscriptions)
     }
 
@@ -451,25 +438,9 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
 
     /// Fetches recent glucose readings from CoreData, up to specified limit.
     /// - Parameter limit: Maximum number of glucose entries to fetch (default: 2)
-    /// - Returns: An array of `NSManagedObjectID`s for glucose readings.
-    private func fetchGlucose(limit: Int = 2) async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchGlucose"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.glucose,
-            key: "date",
-            ascending: false,
-            fetchLimit: limit
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-            return fetchedResults.map(\.objectID)
-        }
+    /// - Returns: An array of `GlucoseRecord` value types (newest first, last 24h).
+    private func fetchGlucose(limit: Int = 2) async throws -> [GlucoseRecord] {
+        try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, limit: limit)
     }
 
     /// Fetches the most recent temporary basal rate from GRDB pump history (last 24h, newest first).
@@ -504,7 +475,7 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
 
         // Fetch glucose - SwissAlpine needs 24, Trio needs 2 (for delta calculation)
         let glucoseLimit = needsHistoricalGlucoseData ? 24 : 2
-        let glucoseIds = try await fetchGlucose(limit: glucoseLimit)
+        let glucoseObjects = try await fetchGlucose(limit: glucoseLimit)
 
         // Fetch all determinations from last 30 minutes (no limit)
         // This ensures we get both enacted and suggested determinations (GRDB value types).
@@ -523,14 +494,9 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
         let previousHash = lastPreparedDataHash
         let previousWatchState = lastPreparedWatchState
 
-        // Capture context locally for use in perform block
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "setupGarminWatchState"
-
-        let watchStates = await context.perform {
-            // Fetch Core Data objects inside perform block (determinations are GRDB value types,
-            // captured from above).
-            let glucoseObjects = glucoseIds.compactMap { context.object(with: $0) as? GlucoseStored }
+        // Everything below is GRDB value types (glucose, determinations, temp basal) — no Core Data
+        // context / perform block needed.
+        let watchStates: [GarminWatchState] = {
             var watchStates: [GarminWatchState] = []
 
             let unitsHint = unitsValue == .mgdL ? "mgdl" : "mmol"
@@ -659,9 +625,9 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
             }
 
             return watchStates
-        }
+        }()
 
-        // Cache for deduplication (outside perform block)
+        // Cache for deduplication
         lastPreparedDataHash = watchStates.hashValue
         lastPreparedWatchState = watchStates
 

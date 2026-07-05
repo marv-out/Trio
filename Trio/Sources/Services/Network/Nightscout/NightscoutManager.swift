@@ -1,5 +1,4 @@
 import Combine
-import CoreData
 import Foundation
 import LoopKitUI
 import Swinject
@@ -129,18 +128,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     /// Bag for Combine subscriptions owned by this manager.
     var subscriptions = Set<AnyCancellable>()
 
-    let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-
     // MARK: - Upload triggers
 
     //
-    // Each upload pipeline is driven by an NSFetchedResultsController whose predicate is the
-    // "not yet uploaded to Nightscout" set for that entity. The controller fires whenever
-    // un-uploaded items appear (or drop out after a successful upload), which we map to a
-    // `requestUpload(pipeline)` call (throttled per pipeline). Bound to the viewContext, they
-    // also pick up batch-inserted glucose via the persistent history merge in CoreDataStack —
-    // replacing the previous changedObjects publisher plus the glucoseStorage.updatePublisher
-    // fallback.
+    // Each upload pipeline is driven by a ValueObservation (GRDB) or an NSFetchedResultsController
+    // (remaining Core Data entities). The observation/controller fires whenever un-uploaded items
+    // appear (or drop out after a successful upload), which we map to a `requestUpload(pipeline)`
+    // call (throttled per pipeline).
 
     // Determinations now live in GRDB; the "not yet uploaded" trigger is a ValueObservation
     // (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
@@ -164,21 +158,9 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     // ValueObservation (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
     var carbEntryUploadObservationCancellable: AnyCancellable?
 
-    let glucoseUploadControllerDelegate = FetchedResultsControllerDelegate()
-    lazy var glucoseUploadController: NSFetchedResultsController<GlucoseStored> = {
-        let request = NSFetchRequest<GlucoseStored>(entityName: "GlucoseStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \GlucoseStored.date, ascending: true)]
-        request.predicate = NSPredicate.glucoseNotYetUploadedToNightscout
-        request.fetchBatchSize = 50
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = glucoseUploadControllerDelegate
-        return controller
-    }()
+    // Glucose readings now live in GRDB; the "not yet uploaded to Nightscout" trigger is a
+    // ValueObservation (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
+    var glucoseUploadObservationCancellable: AnyCancellable?
 
     init(resolver: Resolver) {
         injectServices(resolver)
@@ -837,7 +819,7 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
                 try await nightscout.uploadGlucose(Array(chunk))
             }
 
-            // If successful, update the isUploadedToNS property of the GlucoseStored objects
+            // If successful, mark glucose records as uploaded in GRDB
             await updateGlucoseAsUploaded(glucose)
 
             debug(.nightscout, "Glucose uploaded")
@@ -847,26 +829,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     }
 
     private func updateGlucoseAsUploaded(_ glucose: [BloodGlucose]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateGlucoseAsUploaded"
-        await context.perform {
-            let ids = glucose.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<GlucoseStored> = GlucoseStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToNS = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error.userInfo)"
-                )
-            }
+        do {
+            let ids = glucose.map(\.id)
+            try await GlucoseStore.markUploaded(channel: .nightscout, ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error)"
+            )
         }
     }
 

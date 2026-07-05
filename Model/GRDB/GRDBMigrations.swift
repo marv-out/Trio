@@ -397,6 +397,46 @@ extension GRDBStack {
             try db.create(index: "tempBasalStored_on_pumpEventPk", on: "tempBasalStored", columns: ["pumpEventPk"])
         }
 
+        // v11 — GlucoseStored + DeletedGlucoseStored (the highest read/write-volume entity, migrated
+        // last). Both are standalone (no relationships), so these are straight row-for-row copies.
+        // `glucoseStored`: `id` is the business UUID (string form); the single Decimal `smoothedGlucose`
+        // is stored as TEXT (lossless), like `TDDRecord`. `deletedGlucoseStored` is a tombstone the delete
+        // path writes so a later CGM backfill does not re-ingest a deleted reading. Indexes mirror the
+        // Core Data fetch indexes: `date` (every query), `isManual` (manual-only variants), and each of
+        // the three `isUploadedTo*` flags (each upload channel queries one).
+        migrator.registerMigration("v11_glucose") { db in
+            try db.create(table: "glucoseStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // business UUID (string form)
+                t.column("date", .datetime)
+                t.column("glucose", .integer).notNull().defaults(to: 0) // Int16
+                t.column("direction", .text)
+                t.column("isManual", .boolean).notNull().defaults(to: false)
+                t.column("smoothedGlucose", .text) // Decimal as string (lossless)
+                t.column("isUploadedToNS", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToHealth", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToTidepool", .boolean).notNull().defaults(to: false)
+            }
+            try db.create(index: "glucoseStored_on_date", on: "glucoseStored", columns: ["date"])
+            try db.create(index: "glucoseStored_on_isManual", on: "glucoseStored", columns: ["isManual"])
+            try db.create(index: "glucoseStored_on_isUploadedToNS", on: "glucoseStored", columns: ["isUploadedToNS"])
+            try db.create(index: "glucoseStored_on_isUploadedToHealth", on: "glucoseStored", columns: ["isUploadedToHealth"])
+            try db.create(
+                index: "glucoseStored_on_isUploadedToTidepool",
+                on: "glucoseStored",
+                columns: ["isUploadedToTidepool"]
+            )
+
+            try db.create(table: "deletedGlucoseStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("date", .datetime).notNull()
+                t.column("glucose", .integer).notNull().defaults(to: 0) // Int16
+                t.column("isManualGlucoseEntry", .boolean).notNull().defaults(to: false)
+            }
+            // The backfill dedup filters tombstones by date.
+            try db.create(index: "deletedGlucoseStored_on_date", on: "deletedGlucoseStored", columns: ["date"])
+        }
+
         return migrator
     }
 }

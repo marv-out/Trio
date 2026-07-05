@@ -75,11 +75,6 @@ final class BaseUserNotificationsManager: NSObject, UserNotificationsManager, In
     private let notificationCenter = UNUserNotificationCenter.current()
     private var lifetime = Lifetime()
 
-    private let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-
-    // Queue for handling Core Data change notifications
-    private let queue = DispatchQueue(label: "BaseUserNotificationsManager.queue", qos: .userInitiated)
-    private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
     private var subscriptions = Set<AnyCancellable>()
 
     let firstInterval = 20 // min
@@ -90,12 +85,6 @@ final class BaseUserNotificationsManager: NSObject, UserNotificationsManager, In
         notificationCenter.delegate = self
         injectServices(resolver)
 
-        coreDataPublisher =
-            CoreDataStack.shared.entityChangePublisher
-                .receive(on: queue)
-                .share()
-                .eraseToAnyPublisher()
-
         broadcaster.register(DeterminationObserver.self, observer: self)
         broadcaster.register(BolusFailureObserver.self, observer: self)
         broadcaster.register(pumpNotificationObserver.self, observer: self)
@@ -105,7 +94,6 @@ final class BaseUserNotificationsManager: NSObject, UserNotificationsManager, In
             await sendGlucoseNotification()
         }
         configureNotificationCategories()
-        registerHandlers()
         registerSubscribers()
         subscribeOnLoop()
     }
@@ -132,16 +120,6 @@ final class BaseUserNotificationsManager: NSObject, UserNotificationsManager, In
                 self?.scheduleMissingLoopNotifiactions(date: date)
             }
             .store(in: &lifetime)
-    }
-
-    private func registerHandlers() {
-        // Due to the Batch insert this only is used for observing Deletion of Glucose entries
-        coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
-            guard let self = self else { return }
-            Task {
-                await self.sendGlucoseNotification()
-            }
-        }.store(in: &subscriptions)
     }
 
     private func registerSubscribers() {
@@ -270,34 +248,14 @@ final class BaseUserNotificationsManager: NSObject, UserNotificationsManager, In
         )
     }
 
-    private func fetchGlucoseIDs() async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchGlucoseIDs"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.predicateFor20MinAgo,
-            key: "date",
-            ascending: false,
-            fetchLimit: 3
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID)
-        }
+    private func fetchGlucose() async throws -> [GlucoseRecord] {
+        try await GlucoseStore.fetch(from: Date.twentyMinutesAgo, ascending: false, limit: 3)
     }
 
     @MainActor private func sendGlucoseNotification() async {
         do {
             addAppBadge(glucose: nil)
-            let glucoseIDs = try await fetchGlucoseIDs()
-            let glucoseObjects = try glucoseIDs.compactMap { id in
-                try viewContext.existingObject(with: id) as? GlucoseStored
-            }
+            let glucoseObjects = try await fetchGlucose()
 
             if glucoseStorage.alarm == .none {
                 lastGlucoseAlertToken = ""
@@ -376,7 +334,7 @@ final class BaseUserNotificationsManager: NSObject, UserNotificationsManager, In
         }
     }
 
-    private func alertToken(from glucose: GlucoseStored?) -> String {
+    private func alertToken(from glucose: GlucoseRecord?) -> String {
         if let id = glucose?.id?.uuidString { return id }
 
         if let date = glucose?.date {
@@ -384,9 +342,9 @@ final class BaseUserNotificationsManager: NSObject, UserNotificationsManager, In
             return "date-\(roundedMinute)"
         }
 
-        // Stable fallback for Core Data objects:
-        if let glucose, !glucose.objectID.isTemporaryID {
-            return "objectID-\(glucose.objectID.uriRepresentation().absoluteString)"
+        // Stable fallback keyed on the GRDB row id:
+        if let pk = glucose?.pk {
+            return "pk-\(pk)"
         }
 
         // Stable “unknown” fallback: prevents repeated alarms when identifiers are missing

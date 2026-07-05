@@ -27,7 +27,7 @@ enum GlucosePercentileType: String, Identifiable {
 }
 
 struct GlucoseDailyPercentileChart: View {
-    let glucose: [GlucoseStored]
+    let glucose: [GlucoseRecord]
     let highLimit: Decimal
     let units: GlucoseUnits
     let timeInRangeType: TimeInRangeType
@@ -106,7 +106,6 @@ struct GlucoseDailyPercentileChart: View {
         // Create a new stats object with the visible date range and aggregated values
         return GlucoseDailyPercentileStats(
             date: visibleDateRange.start,
-            readings: [], // Empty array since this is aggregated data
             minimum: aggMinimum,
             percentile10: aggP10,
             percentile25: aggP25,

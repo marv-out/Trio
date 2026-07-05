@@ -35,17 +35,11 @@ class BundleReference {}
         let url = URL(filePath: path)
 
         let now = Date("2025-04-28T19:32:52.000Z")!
-        try await importer.importGlucoseHistory(url: url, now: now)
+        try await importer.importGlucoseHistory(url: url, now: now, in: grdb.pool)
         // run the import againt to check our deduplication logic
-        try await importer.importGlucoseHistory(url: url, now: now)
+        try await importer.importGlucoseHistory(url: url, now: now, in: grdb.pool)
 
-        let allReadings = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored] ?? []
+        let allReadings = try await GlucoseStore.fetch(from: .distantPast, ascending: false, pool: grdb.pool)
 
         #expect(allReadings.count == 274)
         #expect(allReadings.first?.glucose == 115)
@@ -64,15 +58,9 @@ class BundleReference {}
 
         // more than 24 hours in the future from the most recent entry
         let now = Date("2025-04-29T19:32:52.000Z")!
-        try await importer.importGlucoseHistory(url: url, now: now)
+        try await importer.importGlucoseHistory(url: url, now: now, in: grdb.pool)
 
-        let allReadings = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored] ?? []
+        let allReadings = try await GlucoseStore.fetch(from: .distantPast, ascending: false, pool: grdb.pool)
 
         #expect(allReadings.isEmpty)
     }

@@ -19,7 +19,9 @@ extension History.RootView {
                 Button("Delete", role: .destructive) {
                     switch target {
                     case let .glucose(glucose):
-                        state.invokeGlucoseDeletionTask(glucose.objectID)
+                        if let pk = glucose.pk {
+                            state.invokeGlucoseDeletionTask(pk)
+                        }
                     case let .insulin(pumpEvent):
                         if let pk = pumpEvent.event.pk {
                             state.invokeInsulinDeletionTask(pk)

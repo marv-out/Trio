@@ -1,4 +1,3 @@
-import CoreData
 import Foundation
 
 /// Represents statistical data about loop execution success/failure for a specific time period
@@ -138,7 +137,6 @@ extension Stat.StateModel {
             startDate = now.addingTimeInterval(-90.days.timeInterval)
         }
 
-        // Get glucose statistics (still Core Data until GlucoseStored is migrated)
         let totalGlucose = try await calculateGlucoseStats(from: startDate, to: now)
 
         // Pure value-type math — no context, no perform block.
@@ -197,26 +195,7 @@ extension Stat.StateModel {
         from startDate: Date,
         to _: Date
     ) async throws -> Int {
-        let loopTaskContext = CoreDataStack.shared.newTaskContext()
-        loopTaskContext.name = "StatStateModel.calculateGlucoseStats"
-
-        // Create predicate for glucose readings
-        let glucosePredicate = NSPredicate(format: "date >= %@", startDate as NSDate)
-
-        // Fetch glucose readings asynchronously
-        let glucoseResult = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: loopTaskContext,
-            predicate: glucosePredicate,
-            key: "date",
-            ascending: false
-        )
-
-        return await loopTaskContext.perform {
-            guard let readings = glucoseResult as? [GlucoseStored] else {
-                return 0
-            }
-            return readings.count
-        }
+        let records = try await GlucoseStore.fetchForStats(from: startDate)
+        return records.count
     }
 }

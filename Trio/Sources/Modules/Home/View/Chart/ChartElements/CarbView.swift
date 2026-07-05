@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 struct CarbView: ChartContent {
-    let glucoseData: [GlucoseStored]
+    let glucoseData: [GlucoseRecord]
     let units: GlucoseUnits
     let carbData: [CarbEntryRecord]
     let fpuData: [CarbEntryRecord]

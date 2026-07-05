@@ -47,6 +47,12 @@ extension History {
         var tempTargetRunStored: [TempTargetRunRecord] = []
         @ObservationIgnored private var tempTargetRunObservationCancellable: AnyCancellable?
 
+        // Glucose readings now live in GRDB; observed via ValueObservation instead of a SwiftUI
+        // @FetchRequest. The "date >= oneDayAgo" rule is applied in the sink, descending (newest first)
+        // to match the former FetchRequest sort order.
+        var glucoseStored: [GlucoseRecord] = []
+        @ObservationIgnored private var glucoseObservationCancellable: AnyCancellable?
+
         override func subscribe() {
             units = settingsManager.settings.units
             broadcaster.register(DeterminationObserver.self, observer: self)
@@ -55,6 +61,7 @@ extension History {
             setupPumpEventObservation()
             setupOverrideRunObservation()
             setupTempTargetRunObservation()
+            setupGlucoseObservation()
         }
 
         private func setupPumpEventObservation() {
@@ -121,6 +128,25 @@ extension History {
                         guard let self else { return }
                         let cutoff = Date.oneDayAgo
                         tempTargetRunStored = records.filter { ($0.startDate ?? .distantPast) >= cutoff }
+                    }
+                )
+        }
+
+        private func setupGlucoseObservation() {
+            glucoseObservationCancellable = GlucoseStore.observeForChart()
+                .receive(on: DispatchQueue.main)
+                .sink(
+                    receiveCompletion: { completion in
+                        if case let .failure(error) = completion {
+                            debug(.default, "\(DebuggingIdentifiers.failed) History glucose observation failed: \(error)")
+                        }
+                    },
+                    receiveValue: { [weak self] records in
+                        guard let self else { return }
+                        let cutoff = Date.oneDayAgo
+                        // observeForChart() returns newest 1000 rows descending; filter to oneDayAgo
+                        // and keep descending order (newest first) to match former FetchRequest.
+                        glucoseStored = records.filter { ($0.date ?? .distantPast) >= cutoff }
                     }
                 )
         }

@@ -1,55 +1,46 @@
-import CoreData
 import Foundation
 
 extension History.StateModel {
     /// Initiates the glucose deletion process asynchronously
-    /// - Parameter treatmentObjectID: NSManagedObjectID to be able to transfer the object safely from one thread to another thread
-    func invokeGlucoseDeletionTask(_ treatmentObjectID: NSManagedObjectID) {
+    /// - Parameter pk: The GRDB primary key of the GlucoseRecord to delete
+    func invokeGlucoseDeletionTask(_ pk: Int64) {
         Task {
-            await deleteGlucose(treatmentObjectID)
+            await deleteGlucose(pk)
         }
     }
 
-    func deleteGlucose(_ treatmentObjectID: NSManagedObjectID) async {
-        // Delete from Apple Health/Tidepool
-        await deleteGlucoseFromServices(treatmentObjectID)
+    func deleteGlucose(_ pk: Int64) async {
+        // Delete from Apple Health/Nightscout (reads id/date before deleting)
+        await deleteGlucoseFromServices(pk)
 
-        // Delete from Core Data
-        await glucoseStorage.deleteGlucose(treatmentObjectID)
+        // Delete from GRDB (also writes tombstone in one transaction)
+        await glucoseStorage.deleteGlucose(pk)
     }
 
-    func deleteGlucoseFromServices(_ treatmentObjectID: NSManagedObjectID) async {
-        let taskContext = CoreDataStack.shared.newTaskContext()
-        taskContext.name = "deleteContext"
-        taskContext.transactionAuthor = "deleteGlucoseFromServices"
-
-        await taskContext.perform {
-            do {
-                let result = try taskContext.existingObject(with: treatmentObjectID) as? GlucoseStored
-
-                guard let glucoseToDelete = result else {
-                    debugPrint("Data Table State: \(#function) \(DebuggingIdentifiers.failed) glucose not found in core data")
-                    return
-                }
-
-                // Delete from Nightscout
-                if let id = glucoseToDelete.id?.uuidString, let date = glucoseToDelete.date {
-                    self.provider.deleteGlucoseFromNightscout(withID: id, withDate: date)
-                }
-
-                // Delete from Apple Health
-                if let id = glucoseToDelete.id?.uuidString {
-                    self.provider.deleteGlucoseFromHealth(withSyncID: id)
-                }
-
-                debugPrint(
-                    "\(#file) \(#function) \(DebuggingIdentifiers.succeeded) deleted glucose from remote service(s) (Nightscout, Apple Health, Tidepool)"
-                )
-            } catch {
-                debugPrint(
-                    "\(#file) \(#function) \(DebuggingIdentifiers.failed) error while deleting glucose remote service(s) (Nightscout, Apple Health, Tidepool) with error: \(error)"
-                )
+    func deleteGlucoseFromServices(_ pk: Int64) async {
+        do {
+            guard let record = try await GlucoseStore.fetch(pk: pk) else {
+                debugPrint("Data Table State: \(#function) \(DebuggingIdentifiers.failed) glucose not found in GRDB (pk=\(pk))")
+                return
             }
+
+            // Delete from Nightscout
+            if let id = record.id?.uuidString, let date = record.date {
+                provider.deleteGlucoseFromNightscout(withID: id, withDate: date)
+            }
+
+            // Delete from Apple Health
+            if let id = record.id?.uuidString {
+                provider.deleteGlucoseFromHealth(withSyncID: id)
+            }
+
+            debugPrint(
+                "\(#file) \(#function) \(DebuggingIdentifiers.succeeded) deleted glucose from remote service(s) (Nightscout, Apple Health, Tidepool)"
+            )
+        } catch {
+            debugPrint(
+                "\(#file) \(#function) \(DebuggingIdentifiers.failed) error while deleting glucose from remote service(s) (Nightscout, Apple Health, Tidepool) with error: \(error)"
+            )
         }
     }
 }

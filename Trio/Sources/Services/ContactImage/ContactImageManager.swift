@@ -106,25 +106,9 @@ final class BaseContactImageManager: NSObject, ContactImageManager, Injectable {
         try await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: false)
     }
 
-    private func fetchGlucose() async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchGlucose"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.predicateFor20MinAgo,
-            key: "date",
-            ascending: false,
-            fetchLimit: 3 /// We only need 1-3 values, depending on whether the user wants to show delta or not
-        )
-
-        return try await context.perform {
-            guard let glucoseResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return glucoseResults.map(\.objectID)
-        }
+    /// We only need 1-3 values, depending on whether the user wants to show delta or not.
+    private func fetchGlucose() async throws -> [GlucoseRecord] {
+        try await GlucoseStore.fetch(from: Date.twentyMinutesAgo, ascending: false, limit: 3)
     }
 
     private func getCurrentGlucoseTarget() async -> Decimal? {
@@ -180,13 +164,9 @@ final class BaseContactImageManager: NSObject, ContactImageManager, Injectable {
     /// - Important: This function must be called on the main actor to ensure thread safety. Otherwise, we would need to ensure thread safety by either using an actor or a perform closure
     @MainActor func updateContactImageState() async {
         do {
-            // Get NSManagedObjectIDs on backgroundContext
-            let glucoseValuesIds = try await fetchGlucose()
+            // Glucose + determination are GRDB value types now (no NSManagedObjectID round-trip).
+            let glucoseObjects = try await fetchGlucose()
             let lastDetermination = try await fetchlastDetermination()
-
-            // Get NSManagedObjects on MainActor
-            let glucoseObjects: [GlucoseStored] = try await CoreDataStack.shared
-                .getNSManagedObject(with: glucoseValuesIds, context: viewContext)
 
             if let firstGlucoseValue = glucoseObjects.first {
                 let value = settingsManager.settings.units == .mgdL

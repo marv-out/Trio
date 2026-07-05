@@ -20,7 +20,7 @@ struct ForecastChart: View {
             )) // min is 1.5h -> (1.5*1h = 1.5*(5*12*60))
     }
 
-    private var selectedGlucose: GlucoseStored? {
+    private var selectedGlucose: GlucoseRecord? {
         guard let selection = selection else { return nil }
         let range = selection.addingTimeInterval(-150) ... selection.addingTimeInterval(150)
         return state.glucoseFromPersistence.first { $0.date.map(range.contains) ?? false }
@@ -230,8 +230,8 @@ struct ForecastChart: View {
 
                 if state.isSmoothingEnabled, let smoothedGlucose = selectedGlucose?.smoothedGlucose {
                     let smoothedGlucoseToDisplay: Decimal = state.units == .mgdL
-                        ? smoothedGlucose.decimalValue
-                        : smoothedGlucose.decimalValue.asMmolL
+                        ? smoothedGlucose
+                        : smoothedGlucose.asMmolL
                     HStack {
                         Image(systemName: "sparkles")
                         Text(smoothedGlucoseToDisplay.description) + Text(" \(state.units.rawValue)")
@@ -291,8 +291,8 @@ struct ForecastChart: View {
 
             if state.isSmoothingEnabled, let smoothedGlucose = item.smoothedGlucose, smoothedGlucose != 0 {
                 let smoothedGlucoseForDisplay: Decimal = state.units == .mgdL
-                    ? smoothedGlucose.decimalValue
-                    : smoothedGlucose.decimalValue.asMmolL
+                    ? smoothedGlucose
+                    : smoothedGlucose.asMmolL
                 LineMark(
                     x: .value("Time", item.date ?? Date(), unit: .second),
                     y: .value("Value", smoothedGlucoseForDisplay),

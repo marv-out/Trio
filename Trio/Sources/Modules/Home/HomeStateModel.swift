@@ -85,8 +85,8 @@ extension Home {
         var roundedTotalBolus: String = ""
         var selectedTab: Int = 0
         var waitForSuggestion: Bool = false
-        var glucoseFromPersistence: [GlucoseStored] = []
-        var latestTwoGlucoseValues: [GlucoseStored] = []
+        var glucoseFromPersistence: [GlucoseRecord] = []
+        var latestTwoGlucoseValues: [GlucoseRecord] = []
         var carbsFromPersistence: [CarbEntryRecord] = []
         var fpusFromPersistence: [CarbEntryRecord] = []
         var determinationsFromPersistence: [OrefDeterminationRecord] = []
@@ -139,21 +139,9 @@ extension Home {
         // and notify us via their delegate's `onContentChange` closure. This replaces the previous
         // hand-rolled `changedObjectsOnManagedObjectContextDidSavePublisher` + re-fetch approach.
 
-        @ObservationIgnored let glucoseControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var glucoseController: NSFetchedResultsController<GlucoseStored> = {
-            let request = NSFetchRequest<GlucoseStored>(entityName: "GlucoseStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \GlucoseStored.date, ascending: true)]
-            request.predicate = NSPredicate.glucose
-            request.fetchBatchSize = 50
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = glucoseControllerDelegate
-            return controller
-        }()
+        // Glucose now lives in GRDB; the chart list is kept current via ValueObservation instead of a
+        // Core Data NSFetchedResultsController. See GlucoseSetup.
+        @ObservationIgnored var glucoseObservationCancellable: AnyCancellable?
 
         // Carbs + FPUs now live in GRDB; the chart lists are kept current via ValueObservation
         // instead of Core Data NSFetchedResultsControllers. See CarbSetup.

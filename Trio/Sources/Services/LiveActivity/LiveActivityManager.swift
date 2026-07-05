@@ -71,21 +71,12 @@ final class LiveActivityData: ObservableObject {
 
     private var data = LiveActivityData()
 
-    /// A dispatch queue for handling Core Data change notifications.
-    private let queue = DispatchQueue(label: "LiveActivityBridge.queue", qos: .userInitiated)
-    private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
     private var subscriptions = Set<AnyCancellable>()
 
     /// Initializes a new instance of `LiveActivityBridge` and sets up observers, subscribers, and notifications.
     ///
     /// - Parameter resolver: The dependency injection resolver.
     init(resolver: Resolver) {
-        coreDataPublisher =
-            CoreDataStack.shared.entityChangePublisher
-                .receive(on: queue)
-                .share()
-                .eraseToAnyPublisher()
-
         systemEnabled = activityAuthorizationInfo.areActivitiesEnabled
         injectServices(resolver)
         setupNotifications()
@@ -156,9 +147,16 @@ final class LiveActivityData: ObservableObject {
             )
             .store(in: &subscriptions)
 
-        coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
-            Task { await self?.loadGlucose() }
-        }.store(in: &subscriptions)
+        // Glucose moved to GRDB; subscribe to the single shared latest-glucose observation instead of
+        // the Core Data `filteredByEntityName("GlucoseStored")` sink.
+        GlucoseStore.observeLatestChanged
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] _ in
+                    Task { await self?.loadGlucose() }
+                }
+            )
+            .store(in: &subscriptions)
 
         // GRDB observation replaces the Core Data `filteredByEntityName("OrefDetermination")` sink.
         OrefDeterminationStore.observeLatest()

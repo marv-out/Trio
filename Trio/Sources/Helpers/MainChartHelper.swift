@@ -5,16 +5,16 @@ import SwiftUI
 
 enum MainChartHelper {
     // Calculates the glucose value thats the nearest to parameter 'time'
-    /// -Returns: A NSManagedObject of GlucoseStored
+    /// -Returns: A `GlucoseRecord`
     /// it is thread safe as everything is executed on the main thread
-    static func timeToNearestGlucose(glucoseValues: [GlucoseStored], time: TimeInterval) -> GlucoseStored? {
+    static func timeToNearestGlucose(glucoseValues: [GlucoseRecord], time: TimeInterval) -> GlucoseRecord? {
         guard !glucoseValues.isEmpty else {
             return nil
         }
 
         var low = 0
         var high = glucoseValues.count - 1
-        var closestGlucose: GlucoseStored?
+        var closestGlucose: GlucoseRecord?
 
         // binary search to find next glucose
         while low <= high {

@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 struct InsulinView: ChartContent {
-    let glucoseData: [GlucoseStored]
+    let glucoseData: [GlucoseRecord]
     let insulinData: [PumpEventDetails]
     let units: GlucoseUnits
     let bolusDisplayThreshold: BolusDisplayThreshold

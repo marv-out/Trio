@@ -37,7 +37,7 @@ struct MainChartView: View {
         units == .mgdL ? 400 : 22.2
     }
 
-    private var selectedGlucose: GlucoseStored? {
+    private var selectedGlucose: GlucoseRecord? {
         guard let selection = selection else { return nil }
         let range = selection.addingTimeInterval(-150) ... selection.addingTimeInterval(150)
         return state.glucoseFromPersistence.first { $0.date.map(range.contains) ?? false }

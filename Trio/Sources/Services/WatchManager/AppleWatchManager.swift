@@ -35,9 +35,6 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
     private var currentGlucoseTarget: Decimal = 100.0
     private var activeBolusAmount: Double = 0.0
 
-    // Queue for handling Core Data change notifications
-    private let queue = DispatchQueue(label: "BaseWatchManagerManager.queue", qos: .utility)
-    private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
     private var subscriptions = Set<AnyCancellable>()
 
     typealias PumpEvent = PumpEventStored.EventType
@@ -59,14 +56,7 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         broadcaster.register(SettingsObserver.self, observer: self)
         broadcaster.register(PumpSettingsObserver.self, observer: self)
 
-        // Observer for OrefDetermination and adjustments
-        coreDataPublisher =
-            CoreDataStack.shared.entityChangePublisher
-                .receive(on: queue)
-                .share()
-                .eraseToAnyPublisher()
-
-        // Observer for glucose and manual glucose
+        // Observer for glucose and manual glucose (fires on every glucose store/delete)
         glucoseStorage.updatePublisher
             .receive(on: DispatchQueue.global(qos: .background))
             .sink { [weak self] _ in
@@ -113,16 +103,8 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             )
             .store(in: &subscriptions)
 
-        // Due to the Batch insert this only is used for observing Deletion of Glucose entries
-        coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
-            guard let self = self else { return }
-            // Skip if no watch is paired or app not installed
-            guard let session = self.session, session.isPaired, session.isReachable, session.isWatchAppInstalled else { return }
-            Task {
-                let state = await self.setupWatchState()
-                await self.sendDataToWatch(state)
-            }
-        }.store(in: &subscriptions)
+        // Glucose store/delete now fire `glucoseStorage.updatePublisher` (subscribed above), so the
+        // former Core Data `filteredByEntityName("GlucoseStored")` deletion sink is redundant and gone.
 
         // Pump events moved to GRDB; observe the latest non-external bolus instead of the Core Data
         // save notification.
@@ -200,12 +182,9 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             return WatchState(date: Date())
         }
         do {
-            let context = CoreDataStack.shared.newTaskContext()
-            context.name = "setupWatchState"
-
-            // Get NSManagedObjectIDs
-            let glucoseIds = try await fetchGlucose()
-            // Determination + override + temp target are GRDB value types (no NSManagedObjectID round-trip).
+            // Glucose + determination + override + temp target are all GRDB value types now — no
+            // NSManagedObjectID round-trip and no Core Data context / perform block.
+            let glucoseObjects = try await fetchGlucose()
             let latestDetermination = try await determinationStorage.fetchLastDetermination(
                 within: 30,
                 enactedOnly: false
@@ -213,169 +192,163 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             let overridePresets = try await overrideStorage.fetchForOverridePresets()
             let tempTargetPresets = try await tempTargetStorage.fetchForTempTargetPresets()
 
-            // Get NSManagedObjects
-            let glucoseObjects: [GlucoseStored] = try await CoreDataStack.shared
-                .getNSManagedObject(with: glucoseIds, context: context)
+            var watchState = WatchState(date: Date())
 
-            return await context.perform {
-                var watchState = WatchState(date: Date())
+            // Set lastLoopDate
+            let lastLoopMinutes = Int((Date().timeIntervalSince(apsManager.lastLoopDate) - 30) / 60) + 1
+            if lastLoopMinutes > 1440 {
+                watchState.lastLoopTime = "--"
+            } else {
+                watchState.lastLoopTime = "\(lastLoopMinutes) min"
+            }
 
-                // Set lastLoopDate
-                let lastLoopMinutes = Int((Date().timeIntervalSince(self.apsManager.lastLoopDate) - 30) / 60) + 1
-                if lastLoopMinutes > 1440 {
-                    watchState.lastLoopTime = "--"
-                } else {
-                    watchState.lastLoopTime = "\(lastLoopMinutes) min"
-                }
+            // Set IOB and COB from latest determination
+            let iob = iobService.currentIOB ?? 0
+            watchState.iob = Formatter.decimalFormatterWithTwoFractionDigits.string(from: iob as NSNumber)
 
-                // Set IOB and COB from latest determination
-                let iob = self.iobService.currentIOB ?? 0
-                watchState.iob = Formatter.decimalFormatterWithTwoFractionDigits.string(from: iob as NSNumber)
+            if let latestDetermination {
+                let cob = NSNumber(value: latestDetermination.cob)
+                watchState.cob = Formatter.integerFormatter.string(from: cob)
+            }
 
-                if let latestDetermination {
-                    let cob = NSNumber(value: latestDetermination.cob)
-                    watchState.cob = Formatter.integerFormatter.string(from: cob)
-                }
+            // Set override presets with their enabled status
+            watchState.overridePresets = overridePresets.map { override in
+                OverridePresetWatch(
+                    name: override.name ?? "",
+                    isEnabled: override.enabled
+                )
+            }
 
-                // Set override presets with their enabled status
-                watchState.overridePresets = overridePresets.map { override in
-                    OverridePresetWatch(
-                        name: override.name ?? "",
-                        isEnabled: override.enabled
-                    )
-                }
+            guard let latestGlucose = glucoseObjects.first else {
+                return watchState
+            }
 
-                guard let latestGlucose = glucoseObjects.first else {
-                    return watchState
-                }
+            // Assign currentGlucose and its color
+            /// Set current glucose with proper formatting
+            if units == .mgdL {
+                watchState.currentGlucose = "\(latestGlucose.glucose)"
+            } else {
+                let mgdlValue = Decimal(latestGlucose.glucose)
+                let latestGlucoseValue = mgdlValue.formattedAsMmolL
+                watchState.currentGlucose = "\(latestGlucoseValue)"
+            }
 
-                // Assign currentGlucose and its color
-                /// Set current glucose with proper formatting
-                if self.units == .mgdL {
-                    watchState.currentGlucose = "\(latestGlucose.glucose)"
-                } else {
-                    let mgdlValue = Decimal(latestGlucose.glucose)
-                    let latestGlucoseValue = mgdlValue.formattedAsMmolL
-                    watchState.currentGlucose = "\(latestGlucoseValue)"
-                }
+            /// Calculate latest color
+            let hardCodedLow = Decimal(55)
+            let hardCodedHigh = Decimal(220)
+            let isDynamicColorScheme = glucoseColorScheme == .dynamicColor
 
-                /// Calculate latest color
-                let hardCodedLow = Decimal(55)
-                let hardCodedHigh = Decimal(220)
-                let isDynamicColorScheme = self.glucoseColorScheme == .dynamicColor
+            let highGlucoseValue = isDynamicColorScheme ? hardCodedHigh : highGlucose
+            let lowGlucoseValue = isDynamicColorScheme ? hardCodedLow : lowGlucose
+            let highGlucoseColorValue = highGlucoseValue
+            let lowGlucoseColorValue = lowGlucoseValue
+            let targetGlucose = currentGlucoseTarget
 
-                let highGlucoseValue = isDynamicColorScheme ? hardCodedHigh : self.highGlucose
-                let lowGlucoseValue = isDynamicColorScheme ? hardCodedLow : self.lowGlucose
-                let highGlucoseColorValue = highGlucoseValue
-                let lowGlucoseColorValue = lowGlucoseValue
-                let targetGlucose = self.currentGlucoseTarget
+            let currentGlucoseColor = Trio.getDynamicGlucoseColor(
+                glucoseValue: Decimal(latestGlucose.glucose),
+                highGlucoseColorValue: highGlucoseColorValue,
+                lowGlucoseColorValue: lowGlucoseColorValue,
+                targetGlucose: targetGlucose,
+                glucoseColorScheme: glucoseColorScheme
+            )
 
-                let currentGlucoseColor = Trio.getDynamicGlucoseColor(
-                    glucoseValue: Decimal(latestGlucose.glucose),
+            if Decimal(latestGlucose.glucose) <= lowGlucose || Decimal(latestGlucose.glucose) >= highGlucose {
+                watchState.currentGlucoseColorString = currentGlucoseColor.toHexString()
+            } else {
+                watchState.currentGlucoseColorString = "#ffffff" // white when in range; colored when out of range
+            }
+
+            // Map glucose values
+            watchState.glucoseValues = glucoseObjects.compactMap { glucose in
+                let glucoseValue = self.units == .mgdL
+                    ? Double(glucose.glucose)
+                    : Double(truncating: Decimal(glucose.glucose).asMmolL as NSNumber)
+
+                let glucoseColor = Trio.getDynamicGlucoseColor(
+                    glucoseValue: Decimal(glucose.glucose),
                     highGlucoseColorValue: highGlucoseColorValue,
                     lowGlucoseColorValue: lowGlucoseColorValue,
                     targetGlucose: targetGlucose,
                     glucoseColorScheme: self.glucoseColorScheme
                 )
 
-                if Decimal(latestGlucose.glucose) <= self.lowGlucose || Decimal(latestGlucose.glucose) >= self.highGlucose {
-                    watchState.currentGlucoseColorString = currentGlucoseColor.toHexString()
-                } else {
-                    watchState.currentGlucoseColorString = "#ffffff" // white when in range; colored when out of range
-                }
-
-                // Map glucose values
-                watchState.glucoseValues = glucoseObjects.compactMap { glucose in
-                    let glucoseValue = self.units == .mgdL
-                        ? Double(glucose.glucose)
-                        : Double(truncating: Decimal(glucose.glucose).asMmolL as NSNumber)
-
-                    let glucoseColor = Trio.getDynamicGlucoseColor(
-                        glucoseValue: Decimal(glucose.glucose),
-                        highGlucoseColorValue: highGlucoseColorValue,
-                        lowGlucoseColorValue: lowGlucoseColorValue,
-                        targetGlucose: targetGlucose,
-                        glucoseColorScheme: self.glucoseColorScheme
-                    )
-
-                    return WatchGlucoseObject(
-                        date: glucose.date ?? Date(),
-                        glucose: glucoseValue,
-                        color: glucoseColor.toHexString()
-                    )
-                }
-                .sorted { $0.date < $1.date }
-
-                // Set axis domain: min and max Y-axis values
-                // Apply unit parsing conditionally, if user uses mmol/L
-                let maxGlucoseValue = Decimal(glucoseObjects.map { Int($0.glucose) }.max() ?? 200)
-                var maxYValue = Decimal(200)
-
-                if maxGlucoseValue > maxYValue, maxGlucoseValue <= 225 {
-                    maxYValue = Decimal(250)
-                } else if maxGlucoseValue > 225, maxGlucoseValue <= 275 {
-                    maxYValue = Decimal(300)
-                } else if maxGlucoseValue > 275, maxGlucoseValue <= 325 {
-                    maxYValue = Decimal(350)
-                } else if maxGlucoseValue > 325 {
-                    maxYValue = Decimal(400)
-                }
-
-                if self.units == .mmolL {
-                    maxYValue = Double(truncating: maxYValue as NSNumber).asMmolL
-                }
-                watchState.maxYAxisValue = maxYValue
-
-                if self.units == .mmolL {
-                    let minYValue = Double(truncating: watchState.minYAxisValue as NSNumber).asMmolL
-                    watchState.minYAxisValue = minYValue
-                }
-
-                // Convert direction to trend string
-                watchState.trend = latestGlucose.direction
-
-                // Calculate delta if we have at least 2 readings
-                if glucoseObjects.count >= 2 {
-                    var glucoseLast = Decimal(glucoseObjects[0].glucose)
-                    var glucoseSecondLast = Decimal(glucoseObjects[1].glucose)
-                    if self.units == .mmolL {
-                        glucoseLast = glucoseLast.asMmolL
-                        glucoseSecondLast = glucoseSecondLast.asMmolL
-                    }
-
-                    let deltaValue = glucoseLast - glucoseSecondLast
-                    let formattedDelta = Formatter.glucoseFormatter(for: self.units)
-                        .string(from: deltaValue as NSNumber) ?? "0"
-                    watchState.delta = deltaValue < 0 ? "\(formattedDelta)" : "+\(formattedDelta)"
-                }
-
-                // Set temp target presets with their enabled status
-                watchState.tempTargetPresets = tempTargetPresets.map { tempTarget in
-                    TempTargetPresetWatch(
-                        name: tempTarget.name ?? "",
-                        isEnabled: tempTarget.enabled
-                    )
-                }
-
-                // Set units
-                watchState.units = self.units
-
-                // Add limits and pump specific dosing increment settings values
-                watchState.maxBolus = self.settingsManager.pumpSettings.maxBolus
-                watchState.maxCarbs = self.settingsManager.settings.maxCarbs
-                watchState.maxFat = self.settingsManager.settings.maxFat
-                watchState.maxProtein = self.settingsManager.settings.maxProtein
-                watchState.bolusIncrement = self.settingsManager.preferences.bolusIncrement
-                watchState.confirmBolusFaster = self.settingsManager.settings.confirmBolusFaster
-
-                debug(
-                    .watchManager,
-
-                    "📱 Setup WatchState - currentGlucose: \(watchState.currentGlucose ?? "nil"), trend: \(watchState.trend ?? "nil"), delta: \(watchState.delta ?? "nil"), values: \(watchState.glucoseValues.count)"
+                return WatchGlucoseObject(
+                    date: glucose.date ?? Date(),
+                    glucose: glucoseValue,
+                    color: glucoseColor.toHexString()
                 )
-
-                return watchState
             }
+            .sorted { $0.date < $1.date }
+
+            // Set axis domain: min and max Y-axis values
+            // Apply unit parsing conditionally, if user uses mmol/L
+            let maxGlucoseValue = Decimal(glucoseObjects.map { Int($0.glucose) }.max() ?? 200)
+            var maxYValue = Decimal(200)
+
+            if maxGlucoseValue > maxYValue, maxGlucoseValue <= 225 {
+                maxYValue = Decimal(250)
+            } else if maxGlucoseValue > 225, maxGlucoseValue <= 275 {
+                maxYValue = Decimal(300)
+            } else if maxGlucoseValue > 275, maxGlucoseValue <= 325 {
+                maxYValue = Decimal(350)
+            } else if maxGlucoseValue > 325 {
+                maxYValue = Decimal(400)
+            }
+
+            if units == .mmolL {
+                maxYValue = Double(truncating: maxYValue as NSNumber).asMmolL
+            }
+            watchState.maxYAxisValue = maxYValue
+
+            if units == .mmolL {
+                let minYValue = Double(truncating: watchState.minYAxisValue as NSNumber).asMmolL
+                watchState.minYAxisValue = minYValue
+            }
+
+            // Convert direction to trend string
+            watchState.trend = latestGlucose.direction
+
+            // Calculate delta if we have at least 2 readings
+            if glucoseObjects.count >= 2 {
+                var glucoseLast = Decimal(glucoseObjects[0].glucose)
+                var glucoseSecondLast = Decimal(glucoseObjects[1].glucose)
+                if units == .mmolL {
+                    glucoseLast = glucoseLast.asMmolL
+                    glucoseSecondLast = glucoseSecondLast.asMmolL
+                }
+
+                let deltaValue = glucoseLast - glucoseSecondLast
+                let formattedDelta = Formatter.glucoseFormatter(for: units)
+                    .string(from: deltaValue as NSNumber) ?? "0"
+                watchState.delta = deltaValue < 0 ? "\(formattedDelta)" : "+\(formattedDelta)"
+            }
+
+            // Set temp target presets with their enabled status
+            watchState.tempTargetPresets = tempTargetPresets.map { tempTarget in
+                TempTargetPresetWatch(
+                    name: tempTarget.name ?? "",
+                    isEnabled: tempTarget.enabled
+                )
+            }
+
+            // Set units
+            watchState.units = units
+
+            // Add limits and pump specific dosing increment settings values
+            watchState.maxBolus = settingsManager.pumpSettings.maxBolus
+            watchState.maxCarbs = settingsManager.settings.maxCarbs
+            watchState.maxFat = settingsManager.settings.maxFat
+            watchState.maxProtein = settingsManager.settings.maxProtein
+            watchState.bolusIncrement = settingsManager.preferences.bolusIncrement
+            watchState.confirmBolusFaster = settingsManager.settings.confirmBolusFaster
+
+            debug(
+                .watchManager,
+
+                "📱 Setup WatchState - currentGlucose: \(watchState.currentGlucose ?? "nil"), trend: \(watchState.trend ?? "nil"), delta: \(watchState.delta ?? "nil"), values: \(watchState.glucoseValues.count)"
+            )
+
+            return watchState
         } catch {
             debug(
                 .watchManager,
@@ -386,27 +359,10 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         }
     }
 
-    /// Fetches recent glucose readings from CoreData
-    /// - Returns: Array of NSManagedObjectIDs for glucose readings
-    private func fetchGlucose() async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchGlucose"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.glucose,
-            key: "date",
-            ascending: false,
-            fetchLimit: 288
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID)
-        }
+    /// Fetches recent glucose readings from GRDB (newest first, last 24h, capped at 288).
+    /// - Returns: Array of `GlucoseRecord` value types
+    private func fetchGlucose() async throws -> [GlucoseRecord] {
+        try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, limit: 288)
     }
 
     /// Gets the active bolus amount by fetching the last (active) non-external bolus from GRDB. The

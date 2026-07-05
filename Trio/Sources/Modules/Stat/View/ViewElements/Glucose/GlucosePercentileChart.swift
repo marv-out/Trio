@@ -8,7 +8,7 @@ import SwiftUI
 /// and high/low glucose limits.
 struct GlucosePercentileChart: View {
     /// The list of stored glucose values.
-    let glucose: [GlucoseStored]
+    let glucose: [GlucoseRecord]
     /// The upper glucose limit for the chart.
     let highLimit: Decimal
     /// TITR or TING

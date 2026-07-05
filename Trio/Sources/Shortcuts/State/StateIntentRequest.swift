@@ -55,18 +55,11 @@ struct StateBGQuery: EntityQuery {
 }
 
 final class StateIntentRequest: BaseIntentsRequest {
-    func getLastGlucose(onContext: NSManagedObjectContext) throws
+    func getLastGlucose() async throws
         -> (dateGlucose: Date, glucose: String, trend: String, delta: String)
     {
         do {
-            let results = try CoreDataStack.shared.fetchEntities(
-                ofType: GlucoseStored.self,
-                onContext: onContext,
-                predicate: NSPredicate.predicateFor30MinAgo,
-                key: "date",
-                ascending: false,
-                fetchLimit: 2
-            ) as? [GlucoseStored] ?? []
+            let results = try await GlucoseStore.fetch(from: Date.halfHourAgo, ascending: false, limit: 2)
 
             guard let lastValue = results.first else { throw StateIntentError.NoBG }
 

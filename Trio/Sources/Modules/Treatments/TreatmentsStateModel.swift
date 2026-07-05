@@ -108,7 +108,7 @@ extension Treatments {
 
         var externalInsulin: Bool = false
         var showInfo: Bool = false
-        var glucoseFromPersistence: [GlucoseStored] = []
+        var glucoseFromPersistence: [GlucoseRecord] = []
         var determination: [OrefDeterminationRecord] = []
         var preprocessedData: [(id: UUID, forecast: ForecastRecord, forecastValue: ForecastValueRecord)] = []
         var predictionsForChart: Predictions?
@@ -133,25 +133,9 @@ extension Treatments {
         // MARK: - NSFetchedResultsControllers
 
         //
-        // Glucose, the latest determination and the last pump bolus are driven by
-        // NSFetchedResultsControllers bound to the viewContext. They keep their `fetchedObjects`
-        // continuously in sync and notify us through their delegate's `onContentChange` closure.
-
-        @ObservationIgnored let glucoseControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var glucoseController: NSFetchedResultsController<GlucoseStored> = {
-            let request = NSFetchRequest<GlucoseStored>(entityName: "GlucoseStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \GlucoseStored.date, ascending: false)]
-            request.predicate = NSPredicate.glucose
-            request.fetchBatchSize = 50
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = glucoseControllerDelegate
-            return controller
-        }()
+        // Glucose now lives in GRDB; a ValueObservation replaces the former `glucoseController`
+        // NSFetchedResultsController. See `setupGlucoseController`.
+        @ObservationIgnored var glucoseObservationCancellable: AnyCancellable?
 
         // Determinations live in GRDB: a ValueObservation replaces the former
         // `determinationController` NSFetchedResultsController (latest within the last 30 minutes).
@@ -761,24 +745,32 @@ extension Treatments.StateModel: DeterminationObserver, BolusFailureObserver {
 extension Treatments.StateModel {
     // MARK: - Glucose Controller
 
+    /// Observes the glucose chart feed from GRDB. Replaces the former Core Data `glucoseController`
+    /// (which sorted **descending** — newest first); the subscriber re-sorts descending after applying
+    /// the `date >= oneDayAgo` rule, since the delta / current-BG logic below reads `objects.first` as
+    /// the newest reading.
     @MainActor func setupGlucoseController() {
-        glucoseControllerDelegate.onContentChange = { [weak self] in
-            Task { @MainActor in
-                self?.updateGlucoseFromController()
-            }
-        }
-
-        do {
-            try glucoseController.performFetch()
-            updateGlucoseFromController()
-        } catch {
-            debug(.default, "\(DebuggingIdentifiers.failed) Failed to perform glucose fetch: \(error)")
-        }
+        glucoseObservationCancellable = GlucoseStore.observeForChart()
+            .sink(
+                receiveCompletion: { completion in
+                    if case let .failure(error) = completion {
+                        debug(.default, "\(DebuggingIdentifiers.failed) Glucose observation failed: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] records in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        let cutoff = Date.oneDayAgo
+                        let filtered = records
+                            .filter { ($0.date ?? .distantPast) >= cutoff }
+                            .sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+                        self.updateGlucoseFromController(filtered)
+                    }
+                }
+            )
     }
 
-    @MainActor private func updateGlucoseFromController() {
-        guard let objects = glucoseController.fetchedObjects else { return }
-
+    @MainActor private func updateGlucoseFromController(_ objects: [GlucoseRecord]) {
         // Store all objects for the forecast graph
         glucoseFromPersistence = objects
 

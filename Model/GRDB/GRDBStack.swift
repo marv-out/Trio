@@ -59,6 +59,8 @@ final class GRDBStack {
         try await CarbEntryMigration.migrateIfNeeded(into: self)
         try await OrefDeterminationMigration.migrateIfNeeded(into: self)
         try await PumpEventMigration.migrateIfNeeded(into: self)
+        try await GlucoseMigration.migrateIfNeeded(into: self)
+        try await DeletedGlucoseMigration.migrateIfNeeded(into: self)
     }
 
     // MARK: - Connection

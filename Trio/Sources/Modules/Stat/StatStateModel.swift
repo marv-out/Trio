@@ -1,4 +1,3 @@
-import CoreData
 import Foundation
 import Observation
 import SwiftUI
@@ -13,7 +12,7 @@ extension Stat {
         var units: GlucoseUnits = .mgdL
         var timeInRangeType: TimeInRangeType = .timeInTightRange
         var useFPUconversion: Bool = false
-        var glucoseFromPersistence: [GlucoseStored] = []
+        var glucoseFromPersistence: [GlucoseRecord] = []
         var loopStatRecords: [LoopStat] = []
         var loopStats: [LoopStatsProcessedData] = []
         var groupedLoopStats: [LoopStatsByPeriod] = []
@@ -42,7 +41,7 @@ extension Stat {
         var glucosePercentileCache: [Date: GlucoseDailyPercentileStats] = [:]
         var dailyGlucoseDistributionStats: [GlucoseDailyDistributionStats] = []
         var glucoseDistributionCache: [Date: GlucoseDailyDistributionStats] = [:]
-        var glucoseReadings: [GlucoseStored] = []
+        var glucoseReadings: [GlucoseRecord] = []
 
         // Selected Duration for Glucose Stats
         var selectedIntervalForGlucoseStats: StatsTimeIntervalWithToday = .today {
@@ -76,9 +75,6 @@ extension Stat {
         // Selected Meal Chart Type
         var selectedMealChartType: MealChartType = .totalMeals
 
-        // Fetching Contexts
-        let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-
         override func subscribe() {
             setupGlucoseArray(for: .today)
             setupTDDStats()
@@ -94,98 +90,52 @@ extension Stat {
 
         func setupGlucoseArray(for interval: StatsTimeIntervalWithToday) {
             Task {
-                // Load data for current interval (existing code)
-                let ids = await fetchGlucose(for: interval)
-                await updateGlucoseArray(with: ids)
+                // Load data for current interval from GRDB
+                let records = await fetchGlucose(for: interval)
+                await MainActor.run { glucoseFromPersistence = records }
 
                 // Also ensure we have the full dataset loaded
                 if glucoseReadings.isEmpty {
-                    let allIds = await fetchGlucose(for: .total)
-                    await updateAllGlucoseArray(with: allIds)
+                    let allRecords = await fetchGlucose(for: .total)
+                    await MainActor.run { glucoseReadings = allRecords }
                 }
 
-                // Calculate hourly stats and glucose range stats asynchronously with fetched glucose IDs
-                async let hourlyStats: () = calculateHourlyStatsForGlucoseAreaChart(from: ids)
-                async let glucoseRangeStats: () = calculateGlucoseRangeStatsForStackedChart(from: ids)
+                // Calculate hourly stats and glucose range stats asynchronously
+                async let hourlyStats: () = calculateHourlyStatsForGlucoseAreaChart(from: records)
+                async let glucoseRangeStats: () = calculateGlucoseRangeStatsForStackedChart(from: records)
                 _ = await (hourlyStats, glucoseRangeStats)
             }
         }
 
         func setupGlucoseDailyStats() {
             Task {
-                // Get glucose IDs once (using the private fetchGlucose method)
-                let allIds = await fetchGlucose(for: .total)
+                // Get glucose records once (using the private fetchGlucose method)
+                let allRecords = await fetchGlucose(for: .total)
 
-                // Pass the IDs to the implementation in GlucoseStatsSetup.swift
-                await setupGlucoseStats(with: allIds)
+                // Pass the records to the implementation in GlucoseStatsSetup.swift
+                await setupGlucoseStats(with: allRecords)
             }
         }
 
-        private func fetchGlucose(for interval: StatsTimeIntervalWithToday) async -> [NSManagedObjectID] {
+        private func fetchGlucose(for interval: StatsTimeIntervalWithToday) async -> [GlucoseRecord] {
             do {
-                let context = CoreDataStack.shared.newTaskContext()
-                context.name = "StatStateModel.fetchGlucose"
-
-                let predicate: NSPredicate
-
+                let cutoff: Date
                 switch interval {
-                case .day:
-                    predicate = NSPredicate.glucoseForStatsDay
-                case .week:
-                    predicate = NSPredicate.glucoseForStatsWeek
                 case .today:
-                    predicate = NSPredicate.glucoseForStatsToday
+                    cutoff = Date.startOfToday
+                case .day:
+                    cutoff = Date.oneDayAgo
+                case .week:
+                    cutoff = Date.oneWeekAgo
                 case .month:
-                    predicate = NSPredicate.glucoseForStatsMonth
+                    cutoff = Date.oneMonthAgo
                 case .total:
-                    predicate = NSPredicate.glucoseForStatsTotal
+                    cutoff = Date.threeMonthsAgo
                 }
-
-                let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-                    ofType: GlucoseStored.self,
-                    onContext: context,
-                    predicate: predicate,
-                    key: "date",
-                    ascending: false,
-                    batchSize: 100,
-                    propertiesToFetch: ["glucose", "objectID"]
-                )
-
-                return try await context.perform {
-                    guard let fetchedResults = results as? [[String: Any]] else {
-                        throw CoreDataError.fetchError(function: #function, file: #file)
-                    }
-                    return fetchedResults.compactMap { $0["objectID"] as? NSManagedObjectID }
-                }
+                return try await GlucoseStore.fetchForStats(from: cutoff)
             } catch {
                 debug(.default, "\(DebuggingIdentifiers.failed) Error fetching glucose for stats: \(error)")
                 return []
-            }
-        }
-
-        @MainActor private func updateGlucoseArray(with IDs: [NSManagedObjectID]) {
-            do {
-                let glucoseObjects = try IDs.compactMap { id in
-                    try viewContext.existingObject(with: id) as? GlucoseStored
-                }
-                glucoseFromPersistence = glucoseObjects
-            } catch {
-                debugPrint(
-                    "Home State: \(#function) \(DebuggingIdentifiers.failed) error while updating the glucose array: \(error)"
-                )
-            }
-        }
-
-        @MainActor private func updateAllGlucoseArray(with IDs: [NSManagedObjectID]) {
-            do {
-                let glucoseObjects = try IDs.compactMap { id in
-                    try viewContext.existingObject(with: id) as? GlucoseStored
-                }
-                glucoseReadings = glucoseObjects
-            } catch {
-                debugPrint(
-                    "Home State: \(#function) \(DebuggingIdentifiers.failed) error while updating the all glucose array: \(error.localizedDescription)"
-                )
             }
         }
     }

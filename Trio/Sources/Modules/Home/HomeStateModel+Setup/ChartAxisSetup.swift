@@ -2,9 +2,8 @@ import CoreData
 import Foundation
 
 extension Home.StateModel {
-    /// Recomputes the main glucose chart Y axis bounds from the fetched glucose objects.
-    /// Runs on the main actor since the inputs are viewContext managed objects.
-    @MainActor func updateGlucoseChartYAxis(glucoseValues: [GlucoseStored]) {
+    /// Recomputes the main glucose chart Y axis bounds from the fetched glucose records.
+    @MainActor func updateGlucoseChartYAxis(glucoseValues: [GlucoseRecord]) {
         let glucoseMapped = glucoseValues.map { Decimal($0.glucose) }
         let forecastValues = preprocessedData.map { Decimal($0.forecastValue.value) }
 

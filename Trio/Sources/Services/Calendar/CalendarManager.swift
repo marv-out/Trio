@@ -20,9 +20,6 @@ final class BaseCalendarManager: CalendarManager, Injectable {
     @Injected() private var storage: FileStorage!
     @Injected() private var iobService: IOBService!
 
-    // Queue for handling Core Data change notifications
-    private let queue = DispatchQueue(label: "BaseCalendarManager.queue", qos: .background)
-    private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
     private var subscriptions = Set<AnyCancellable>()
     private var previousDeterminationId: Int64?
 
@@ -64,20 +61,11 @@ final class BaseCalendarManager: CalendarManager, Injectable {
         injectServices(resolver)
         setupCurrentCalendar()
 
-        coreDataPublisher =
-            CoreDataStack.shared.entityChangePublisher
-                .receive(on: queue)
-                .share()
-                .eraseToAnyPublisher()
-
         Task {
             await createEvent()
         }
-        registerHandlers()
         registerSubscribers()
     }
-
-    let viewContext = CoreDataStack.shared.persistentContainer.viewContext
 
     private func setupCurrentCalendar() {
         if currentCalendarID == nil {
@@ -86,15 +74,6 @@ final class BaseCalendarManager: CalendarManager, Injectable {
                 currentCalendarID = defaultCalendar.title
             }
         }
-    }
-
-    private func registerHandlers() {
-        coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
-            guard let self = self else { return }
-            Task {
-                await self.createEvent()
-            }
-        }.store(in: &subscriptions)
     }
 
     private func registerSubscribers() {
@@ -179,25 +158,8 @@ final class BaseCalendarManager: CalendarManager, Injectable {
         try await OrefDeterminationStore.fetchLast(within: 30, enactedOnly: false)
     }
 
-    private func fetchGlucose() async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchGlucose"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.predicateFor30MinAgo,
-            key: "date",
-            ascending: false,
-            propertiesToFetch: ["objectID", "glucose"]
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [[String: Any]] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.compactMap { $0["objectID"] as? NSManagedObjectID }
-        }
+    private func fetchGlucose() async throws -> [GlucoseRecord] {
+        try await GlucoseStore.fetch(from: Date.halfHourAgo, ascending: false)
     }
 
     @MainActor func createEvent() async {
@@ -210,13 +172,9 @@ final class BaseCalendarManager: CalendarManager, Injectable {
                 return
             }
 
-            let glucoseIds = try await fetchGlucose()
+            let glucoseObjects = try await fetchGlucose()
 
             deleteAllEvents(in: calendar)
-
-            let glucoseObjects = try glucoseIds.compactMap { id in
-                try viewContext.existingObject(with: id) as? GlucoseStored
-            }
 
             guard let lastGlucoseObject = glucoseObjects.first, let lastGlucoseValue = glucoseObjects.first?.glucose,
                   let secondLastReading = glucoseObjects.dropFirst().first?.glucose else { return }

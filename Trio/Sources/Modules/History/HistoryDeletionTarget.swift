@@ -1,15 +1,14 @@
-import CoreData
 import Foundation
 
 extension History {
     enum DeletionTarget: Identifiable {
-        case glucose(GlucoseStored)
+        case glucose(GlucoseRecord)
         case insulin(PumpEventDetails)
         case carbs(CarbEntryRecord)
 
         var id: AnyHashable {
             switch self {
-            case let .glucose(glucose): return AnyHashable(glucose.objectID)
+            case let .glucose(glucose): return AnyHashable(glucose.pk ?? -1)
             case let .insulin(pumpEvent): return AnyHashable(pumpEvent.event.pk ?? -1)
             case let .carbs(carbEntry): return AnyHashable(carbEntry.pk ?? -1)
             }

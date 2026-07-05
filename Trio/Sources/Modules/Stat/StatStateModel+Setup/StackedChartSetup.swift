@@ -1,4 +1,3 @@
-import CoreData
 import Foundation
 
 /// Represents the distribution of glucose values within specific ranges for each hour.
@@ -61,70 +60,57 @@ extension Stat.StateModel {
     /// - 70-140 = (3/7)*100 = 42.9%
     /// - 140-180 = (2/7)*100 = 28.6%
     /// - 180-200 = (2/7)*100 = 28.6%
-    func calculateGlucoseRangeStatsForStackedChart(from ids: [NSManagedObjectID]) async {
-        let taskContext = CoreDataStack.shared.newTaskContext()
-
+    func calculateGlucoseRangeStatsForStackedChart(from records: [GlucoseRecord]) async {
         let calendar = Calendar.current
 
-        let stats = await taskContext.perform {
-            // Convert IDs to GlucoseStored objects using the context
-            let readings = ids.compactMap { id -> GlucoseStored? in
-                do {
-                    return try taskContext.existingObject(with: id) as? GlucoseStored
-                } catch {
-                    debugPrint("\(DebuggingIdentifiers.failed) Error fetching glucose: \(error)")
-                    return nil
+        // GlucoseRecord is a value type — no context round-trip needed
+        // Count unique days for each hour
+        let daysPerHour = (0 ... 23).map { hour in
+            let uniqueDays = Set(records.compactMap { record -> Date? in
+                guard let date = record.date else { return nil }
+                if calendar.component(.hour, from: date) == hour {
+                    return calendar.startOfDay(for: date)
                 }
+                return nil
+            })
+            return (hour: hour, days: uniqueDays.count)
+        }
+
+        // Define glucose ranges and their conditions
+        // Ranges are processed from bottom to top in the stacked chart
+        let ranges: [(name: String, condition: (Int) -> Bool)] = [
+            ("<54", { g in g <= 54 }),
+            ("54-\(timeInRangeType.bottomThreshold)", { g in g > 54 && g < self.timeInRangeType.bottomThreshold }),
+            (
+                "\(timeInRangeType.bottomThreshold)-\(timeInRangeType.topThreshold)",
+                { g in g >= self.timeInRangeType.bottomThreshold && g <= self.timeInRangeType.topThreshold }
+            ),
+            ("\(timeInRangeType.topThreshold)-180", { g in g > self.timeInRangeType.topThreshold && g <= 180 }),
+            ("180-200", { g in g > 180 && g <= 200 }),
+            ("200-220", { g in g > 200 && g <= 220 }),
+            (">220", { g in g > 220 })
+        ]
+
+        // Process each range to create the chart data
+        let stats = ranges.map { rangeName, condition in
+            // Calculate values for each hour within this range
+            let hourlyValues = (0 ... 23).map { hour in
+                let totalDaysForHour = Double(daysPerHour[hour].days)
+                // Skip if no data for this hour
+                guard totalDaysForHour > 0 else { return (hour: hour, count: 0) }
+
+                // Count readings that match the range condition for this hour
+                let readingsInRange = records.filter { record in
+                    guard let date = record.date else { return false }
+                    return calendar.component(.hour, from: date) == hour &&
+                        condition(Int(record.glucose))
+                }.count
+
+                // Convert to percentage based on number of days with data
+                let percentage = (Double(readingsInRange) / totalDaysForHour) * 100.0
+                return (hour: hour, count: Int(percentage))
             }
-
-            // Count unique days for each hour
-            let daysPerHour = (0 ... 23).map { hour in
-                let uniqueDays = Set(readings.compactMap { reading -> Date? in
-                    guard let date = reading.date else { return nil }
-                    if calendar.component(.hour, from: date) == hour {
-                        return calendar.startOfDay(for: date)
-                    }
-                    return nil
-                })
-                return (hour: hour, days: uniqueDays.count)
-            }
-
-            // Define glucose ranges and their conditions
-            // Ranges are processed from bottom to top in the stacked chart
-            let ranges: [(name: String, condition: (Int) -> Bool)] = [
-                ("<54", { g in g <= 54 }),
-                ("54-\(self.timeInRangeType.bottomThreshold)", { g in g > 54 && g < self.timeInRangeType.bottomThreshold }),
-                (
-                    "\(self.timeInRangeType.bottomThreshold)-\(self.timeInRangeType.topThreshold)",
-                    { g in g >= self.timeInRangeType.bottomThreshold && g <= self.timeInRangeType.topThreshold }
-                ),
-                ("\(self.timeInRangeType.topThreshold)-180", { g in g > self.timeInRangeType.topThreshold && g <= 180 }),
-                ("180-200", { g in g > 180 && g <= 200 }),
-                ("200-220", { g in g > 200 && g <= 220 }),
-                (">220", { g in g > 220 })
-            ]
-
-            // Process each range to create the chart data
-            return ranges.map { rangeName, condition in
-                // Calculate values for each hour within this range
-                let hourlyValues = (0 ... 23).map { hour in
-                    let totalDaysForHour = Double(daysPerHour[hour].days)
-                    // Skip if no data for this hour
-                    guard totalDaysForHour > 0 else { return (hour: hour, count: 0) }
-
-                    // Count readings that match the range condition for this hour
-                    let readingsInRange = readings.filter { reading in
-                        guard let date = reading.date else { return false }
-                        return calendar.component(.hour, from: date) == hour &&
-                            condition(Int(reading.glucose))
-                    }.count
-
-                    // Convert to percentage based on number of days with data
-                    let percentage = (Double(readingsInRange) / totalDaysForHour) * 100.0
-                    return (hour: hour, count: Int(percentage))
-                }
-                return GlucoseRangeStats(name: rangeName, values: hourlyValues)
-            }
+            return GlucoseRangeStats(name: rangeName, values: hourlyValues)
         }
 
         // Update stats on main thread

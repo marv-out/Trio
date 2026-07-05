@@ -1,5 +1,6 @@
 import CoreData
 import Foundation
+import GRDB
 import Swinject
 import Testing
 
@@ -10,14 +11,16 @@ import Testing
     let resolver: Resolver
     var coreDataStack: CoreDataStack!
     var testContext: NSManagedObjectContext!
+    var grdb: GRDBStack!
 
     init() async throws {
-        // Create test context
-        // As we are only using this single test context to initialize our in-memory DeterminationStorage we need to perform the Unit Tests serialized
+        // Glucose lives in GRDB now: an in-memory pool backs the glucose assertions (exercised through
+        // the `in:` seam). A Core Data test context is still needed for the other storages the assembler
+        // graph builds.
         coreDataStack = try await CoreDataStack.createForTests()
         testContext = coreDataStack.newTaskContext()
+        grdb = try GRDBStack.makeInMemoryForTests()
 
-        // Create assembler with test assembly
         let assembler = Assembler([
             StorageAssembly(),
             ServiceAssembly(),
@@ -25,258 +28,146 @@ import Testing
             NetworkAssembly(),
             UIAssembly(),
             SecurityAssembly(),
-            TestAssembly(testContext: testContext) // Add our test assembly last to override Storage
+            TestAssembly(testContext: testContext)
         ])
 
         resolver = assembler.resolver
         injectServices(resolver)
     }
 
-    @Test("Storage is correctly initialized") func testStorageInitialization() {
-        // Verify storage exists
-        #expect(storage != nil, "GlucoseStorage should be injected")
+    /// The resolved `BaseGlucoseStorage`, used to exercise the store/backfill dedup + clamp through the
+    /// storage layer against the in-memory pool via the `in:` seam. Force-cast: the test assembly always
+    /// registers `BaseGlucoseStorage`.
+    // swiftlint:disable:next force_cast
+    private var base: BaseGlucoseStorage { storage as! BaseGlucoseStorage }
 
-        // Verify it's the correct type
+    @Test("Storage is correctly initialized") func testStorageInitialization() {
+        #expect(storage != nil, "GlucoseStorage should be injected")
         #expect(storage is BaseGlucoseStorage, "Storage should be of type BaseGlucoseStorage")
     }
 
     @Test("Store and retrieve glucose entries") func testStoreAndRetrieveGlucose() async throws {
-        // Given
         let testGlucose = [
             BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 126)
         ]
 
-        // When
-        try await storage.storeGlucose(testGlucose)
+        try await base.storeGlucose(testGlucose, in: grdb.pool)
 
-        // Then verify stored entries
-        let storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 126"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
-
-        #expect(storedEntries?.isEmpty == false, "Should have stored entries")
-        #expect(storedEntries?.count == 1, "Should have exactly one entry")
-        #expect(storedEntries?[0].glucose == 126, "Glucose value should match")
-        #expect(storedEntries?[0].direction == "Flat", "Direction should match")
+        let stored = try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, pool: grdb.pool)
+        #expect(stored.count == 1, "Should have exactly one entry")
+        #expect(stored[0].glucose == 126, "Glucose value should match")
+        #expect(stored[0].direction == "Flat", "Direction should match")
+        #expect(stored[0].isManual == false, "CGM reading should not be manual")
     }
 
-    @Test("Delete glucose entry") func testDeleteGlucose() async throws {
-        // Given
-        let testGlucose = [
-            BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 140)
-        ]
-        try await storage.storeGlucose(testGlucose)
+    @Test("Duplicate readings within the buffer are deduped") func testStoreDedup() async throws {
+        let date = Date()
+        let reading = [BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: date, glucose: 130)]
 
-        // Get the stored entry's ObjectID
-        let storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 140"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
+        try await base.storeGlucose(reading, in: grdb.pool)
+        // Storing the same timestamp again must be filtered out (proximity dedup against DB dates).
+        try await base.storeGlucose(reading, in: grdb.pool)
 
-        guard let objectID = storedEntries?.first?.objectID else {
-            throw TestError("Failed to get stored entry's ObjectID")
-        }
-
-        #expect(storedEntries.isNotNilNotEmpty == true, "Should have exactly one (test) entry")
-
-        // When
-        await storage.deleteGlucose(objectID)
-
-        // Then verify deletion
-        let remainingEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 140"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
-
-        #expect(remainingEntries?.isEmpty == true, "Should have no entries after deletion")
-
-        // Finally verify that it stored a copy
-        let archivedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: DeletedGlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 140"),
-            key: "date",
-            ascending: false
-        ) as? [DeletedGlucoseStored]
-
-        #expect(archivedEntries?.isEmpty == false, "Should have archived entries after deletion")
+        let stored = try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, pool: grdb.pool)
+        #expect(stored.count == 1, "Duplicate reading should be deduped")
     }
 
-    @Test("Get glucose not yet uploaded to Nightscout") func testGetGlucoseNotYetUploadedToNightscout() async throws {
-        // Given
-        let testGlucose = [
-            BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 160)
-        ]
-        try await storage.storeGlucose(testGlucose)
+    @Test("Delete writes a tombstone and removes the reading") func testDeleteWritesTombstone() async throws {
+        let record = try await GlucoseStore.store(
+            GlucoseRecord(id: UUID(), date: Date(), glucose: 140, isManual: true),
+            pool: grdb.pool
+        )
+        let pk = try #require(record.pk)
 
-        // When
-        let notUploadedEntries = try await storage.getGlucoseNotYetUploadedToNightscout()
+        try await GlucoseStore.delete(pk: pk, pool: grdb.pool)
 
-        // Then
-        #expect(!notUploadedEntries.isEmpty, "Should have entries not uploaded to NS")
-        #expect(notUploadedEntries[0].glucose == 160, "Glucose value should match")
+        let remaining = try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, pool: grdb.pool)
+        #expect(remaining.isEmpty, "Should have no entries after deletion")
+
+        let tombstones = try await DeletedGlucoseStore.existingDates(
+            from: Date.oneDayAgo,
+            to: Date().addingTimeInterval(60),
+            pool: grdb.pool
+        )
+        #expect(!tombstones.isEmpty, "Should have written a deleted-glucose tombstone")
+    }
+
+    @Test("A backfilled reading matching a tombstone is not re-ingested") func testBackfillSkipsTombstoned() async throws {
+        let backfillDate = Date().addingTimeInterval(-30 * 60)
+        // Seed a tombstone for that exact reading.
+        try await DeletedGlucoseStore.store(
+            DeletedGlucoseRecord(date: backfillDate, glucose: 100, isManualGlucoseEntry: false),
+            pool: grdb.pool
+        )
+
+        try await base.backfillGlucose(
+            [BloodGlucose(direction: BloodGlucose.Direction.flat, date: 456, dateString: backfillDate, glucose: 100)],
+            in: grdb.pool
+        )
+
+        let stored = try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, pool: grdb.pool)
+        #expect(stored.isEmpty, "A backfilled reading matching a tombstone must not be re-ingested")
+    }
+
+    @Test("Get glucose not yet uploaded to Nightscout") func testGetGlucoseNotYetUploaded() async throws {
+        try await base.storeGlucose(
+            [BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 160)],
+            in: grdb.pool
+        )
+
+        let notUploaded = try await GlucoseStore.fetchNotYetUploaded(channel: .nightscout, pool: grdb.pool)
+        #expect(!notUploaded.isEmpty, "Should have entries not uploaded to NS")
+        #expect(notUploaded[0].glucose == 160, "Glucose value should match")
+        #expect(notUploaded[0].isUploadedToNS == false, "Freshly stored reading is not yet uploaded")
+    }
+
+    @Test("Mark uploaded flips the channel flag") func testMarkUploaded() async throws {
+        let record = try await GlucoseStore.store(
+            GlucoseRecord(id: UUID(), date: Date(), glucose: 155),
+            pool: grdb.pool
+        )
+        let id = try #require(record.id)
+
+        try await GlucoseStore.markUploaded(channel: .nightscout, ids: [id.uuidString], pool: grdb.pool)
+
+        let notUploaded = try await GlucoseStore.fetchNotYetUploaded(channel: .nightscout, pool: grdb.pool)
+        #expect(notUploaded.isEmpty, "Reading should be marked uploaded to NS")
     }
 
     @Test("Sub-39 glucose is clamped to 39 on storeGlucose") func testStoreGlucoseClampsBelowMinimum() async throws {
-        // Given a CGM reading below the 39 mg/dL floor (e.g. LibreTransmitter delivering 23)
-        let testGlucose = [
-            BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 23)
-        ]
+        // A CGM reading below the 39 mg/dL floor (e.g. LibreTransmitter delivering 23)
+        try await base.storeGlucose(
+            [BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 23)],
+            in: grdb.pool
+        )
 
-        // When
-        try await storage.storeGlucose(testGlucose)
-
-        // Then the stored row should be clamped to 39, not 23
-        let clampedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 39"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
-
-        #expect(clampedEntries?.count == 1, "Sub-39 glucose should be clamped and stored as 39")
-
-        let rawEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 23"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
-
-        #expect(rawEntries?.isEmpty == true, "Raw sub-39 value must not be persisted")
+        let stored = try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, pool: grdb.pool)
+        #expect(stored.count == 1, "Should have stored one reading")
+        #expect(stored[0].glucose == 39, "Sub-39 glucose should be clamped to 39, not stored raw")
     }
 
     @Test("Sub-39 glucose is clamped to 39 on backfillGlucose") func testBackfillGlucoseClampsBelowMinimum() async throws {
-        // Given a backfilled CGM reading below the 39 mg/dL floor
         let backfillDate = Date().addingTimeInterval(-30 * 60)
-        let testGlucose = [
-            BloodGlucose(direction: BloodGlucose.Direction.flat, date: 456, dateString: backfillDate, glucose: 28)
-        ]
+        try await base.backfillGlucose(
+            [BloodGlucose(direction: BloodGlucose.Direction.flat, date: 456, dateString: backfillDate, glucose: 28)],
+            in: grdb.pool
+        )
 
-        // When
-        try await storage.backfillGlucose(testGlucose)
-
-        // Then the backfilled row should be clamped to 39
-        let clampedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 39"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
-
-        #expect(clampedEntries?.count == 1, "Sub-39 backfilled glucose should be clamped and stored as 39")
+        let stored = try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, pool: grdb.pool)
+        #expect(stored.count == 1, "Should have stored one backfilled reading")
+        #expect(stored[0].glucose == 39, "Sub-39 backfilled glucose should be clamped to 39")
     }
 
-    @Test(
-        "Test glucose alarms",
-        .enabled(if: false, "Flaky test, disabled while investigating")
-    ) func testGlucoseAlarms() async throws {
-        // Given
-        let lowGlucose = [
-            BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 55)
-        ]
-        let highGlucose = [
-            BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 271)
-        ]
-        let normalGlucose = [
-            BloodGlucose(direction: BloodGlucose.Direction.flat, date: 123, dateString: Date(), glucose: 100)
-        ]
+    @Test("Smoothed glucose round-trips as a lossless Decimal") func testSmoothedGlucoseRoundTrip() async throws {
+        let record = try await GlucoseStore.store(
+            GlucoseRecord(id: UUID(), date: Date(), glucose: 120),
+            pool: grdb.pool
+        )
+        let pk = try #require(record.pk)
 
-        // When - Test low glucose
-        try await storage.storeGlucose(lowGlucose)
-        var storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 55"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
+        try await GlucoseStore.updateSmoothed([(pk: pk, value: Decimal(118))], pool: grdb.pool)
 
-        // Then
-        #expect(storedEntries?.first?.glucose == 55, "Low glucose value should match")
-        #expect(storage.alarm == .low, "Should trigger low glucose alarm") // default low limit is 72 mg/dL
-
-        // When - Test high glucose
-        try await storage.storeGlucose(highGlucose)
-        storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 271"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
-
-        // Then
-        #expect(storedEntries?.first?.glucose == 271, "High glucose value should match")
-        #expect(storage.alarm == .high, "Should trigger high glucose alarm") // default high limit is 270 mg/dL
-
-        // When - Test normal glucose
-        try await storage.storeGlucose(normalGlucose)
-        storedEntries = try await coreDataStack.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: testContext,
-            predicate: NSPredicate(format: "glucose == 100"),
-            key: "date",
-            ascending: false
-        ) as? [GlucoseStored]
-
-        // Then
-        #expect(storedEntries?.first?.glucose == 100, "Normal glucose value should match")
-        #expect(storage.alarm == nil, "Should not trigger any alarm")
+        let stored = try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, pool: grdb.pool)
+        #expect(stored.first?.smoothedGlucose == Decimal(118), "Smoothed glucose should round-trip exactly")
     }
-
-    /* Commenting out while we don't have getGlucoseStatus defined
-     @Test("getGlucoseStatus returns correct deltas for 0/5/15/30m readings") func testGetGlucoseStatusFourPoints() async throws {
-         let now = Date()
-         // Prepare 4 readings: at 0, 5, 15, and 30 minutes ago
-         let specs: [(offset: TimeInterval, value: Int)] = [
-             (0, 100), // now
-             (5 * 60, 110), // 5m ago
-             (15 * 60, 120), // 15m ago
-             (30 * 60, 130) // 30m ago
-         ]
-
-         // Insert them into CoreData so that our fetch predicate picks them up
-         for (offset, value) in specs {
-             await testContext.perform {
-                 let glucoseToStore = GlucoseStored(context: testContext)
-                 glucoseToStore.id = UUID()
-                 glucoseToStore.date = now.addingTimeInterval(-offset)
-                 glucoseToStore.glucose = Int16(value)
-             }
-         }
-         try testContext.save()
-
-         // Call the method under test
-         let status = try await storage.getGlucoseStatus()
-         #expect(status != nil, "Expected non‐nil status")
-
-         // “Now” glucose is the 0m reading
-         #expect(status!.glucose == 100)
-
-         // lastDelta: only the 5m point: (100–110)/5*5 = –10
-         #expect(status!.delta == -10)
-
-         // shortAvgDelta: average of 5m and 15m windows:
-         //   5m window:   (100–110)/5*5   = –10
-         //   15m window: (100–120)/15*5 ≈ –6.6667 → –6.67
-         //   avg ≈ (–10 + –6.67)/2 = –8.333… → rounded to –8.33
-         #expect(status!.shortAvgDelta == -8.33)
-
-         // longAvgDelta: only the 30m window: (100–130)/30*5 = –5
-         #expect(status!.longAvgDelta == -5)
-     }*/
 }

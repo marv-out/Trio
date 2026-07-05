@@ -814,7 +814,51 @@ Core Data `contextProvider` for `PumpHistoryStorage`.
 
 </details>
 
-### 🔧 Step 12 — `GlucoseStored` + `DeletedGlucoseStored` (planned, not yet implemented)
+### ✅ Step 12 — `GlucoseStored` + `DeletedGlucoseStored` (done, this branch)
+
+Implemented as planned below. Notable implementation decisions:
+- **Records (`Model/GRDB/GlucoseRecord.swift`).** `GlucoseRecord` (`id` UUID as TEXT, the one Decimal
+  `smoothedGlucose` as TEXT — manual `Row`/`PersistenceContainer` like `TDDRecord`; ports `directionEnum`)
+  and `DeletedGlucoseRecord` (plain `Codable`). Both `MutablePersistableRecord`. Schema **v11** +
+  `GlucoseMigration`/`DeletedGlucoseMigration` (two files, two flags `grdb.didMigrateGlucose` /
+  `grdb.didMigrateDeletedGlucose`), registered after `PumpEventMigration`.
+- **Single shared latest-glucose observation.** `GlucoseStore.observeLatestChanged` is a `static let`
+  `ValueObservation.tracking { newest row }.share()` publisher. The former five
+  `coreDataPublisher.filteredByEntityName("GlucoseStored")` sinks collapse onto it: LiveActivity + Garmin
+  (Garmin keeps its 500 ms debounce) subscribe to it directly; **AppleWatch / Calendar / UserNotifications
+  already had a `glucoseStorage.updatePublisher` sink**, and since `storeGlucose`/`backfillGlucose`/
+  `addManualGlucose`/`deleteGlucose` now all fire `updateSubject`, their redundant CD glucose sink was
+  simply removed (no second observation). ContactImage keeps its determination trigger and just fetches
+  glucose from the store. Each `coreDataPublisher`/`queue`/`viewContext` that this left unused was deleted.
+- **Ingest dedup keeps the buffer/proximity match against DB dates** (Step 11 precision lesson): the
+  storage layer fetches `GlucoseStore.existingDates` / `DeletedGlucoseStore.existingDates` for the ±buffer
+  window and filters in Swift (1 s for store, 3.5 min for backfill) — no exact sub-millisecond `Date` key.
+- **Smoothing is a pure function.** `FetchGlucoseManager.computeExponentialSmoothing([GlucoseRecord], …)`
+  returns `[(pk, Decimal)]` (no in-place mutation); the fallback/gap/xDrip-38 branches carry over verbatim.
+  `exponentialSmoothingGlucose()` now fetches `GlucoseStore.fetchForSmoothing(limit: 350)` (newest
+  non-manual, chronological) and writes `GlucoseStore.updateSmoothed(pairs)`.
+- **oref selection (#1054) preserved** in `OpenAPS.fetchAndProcessGlucose` (smoothed only for non-manual
+  with non-zero `smoothedGlucose`, else raw). That method + the smoothing/store paths gained an optional
+  `in pool:` seam for tests.
+- **Chart reactivity** (Step 11 traps applied): `HomeStateModel`/`TreatmentsStateModel` `glucoseController`
+  FRCs → `GlucoseStore.observeForChart()` (newest 1000; subscriber filters `date >= oneDayAgo` and sorts —
+  **ascending** for Home, **descending** for Treatments/History); `MainChartView.onAppear` already kicks
+  off the marker/Y-axis computations, and `updateGlucoseChartYAxis` runs inside the observation sink.
+- **APSManager** also read `GlucoseStored` (loop-input validation + the TIR/A1c stats) — migrated to
+  `GlucoseStore.fetch`/`fetchForStats` value types; `tir`/`glucoseStats` take `[GlucoseRecord]`; the dead
+  `fetchGlucose(on:)` helper (and `OpenAPS.fetchGlucose(on:)`, whose result was unused) were removed.
+- **Uploads / History / Stat / Calibrations** moved to the store (3 upload FRCs →
+  `observeNotYetUploadedCount(channel:)`; `markUploaded(channel:ids:)` matches on `id`; History deletion
+  carries `pk`; `deleteGlucose(_ pk:)` writes the tombstone + delete in one transaction).
+- **Tests** rewritten against an in-memory pool (`GlucoseStorageTests` store/backfill/dedup/tombstone/
+  not-yet-uploaded/clamp/smoothed round-trip; `GlucoseSmoothingTests` the pure smoothing math +
+  `fetchForSmoothing` 350-window + the #1054 selection via the `in pool:` seam; `JSONImporterTests` glucose
+  cases through `importGlucoseHistory(…, in: pool)` + `makeGlucoseRecord`); `TestAssembly` drops the Core
+  Data `contextProvider` for `GlucoseStorage`.
+
+The Core Data `GlucoseStored`/`DeletedGlucoseStored` entities stay as the read-only migration source.
+
+<details><summary>Original plan (for reference)</summary>
 
 The **highest read/write-volume entity** and the last one to migrate. A new reading arrives every ~5
 minutes and is read by the live charts, every algorithm run, three upload channels, and a fan of
@@ -980,12 +1024,14 @@ for `GlucoseStorage`.
   entities from the model, delete the generated classes + dead helpers, and remove
   `eraseDatabaseOnSchemaChange`) can run.
 
+</details>
+
 ### ⏳ After the determination family
 
 1. ~~`OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.~~ **✅ done (Step 10).**
 2. ~~`PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk.~~ **✅ done (Step 11).**
-3. `GlucoseStored` (+ `DeletedGlucoseStored` 9b) — highest read volume; uses `ValueObservation` for the
-   live charts. **Planned: see Step 12 above.** (The last entity; the CD cleanup step follows.)
+3. ~~`GlucoseStored` (+ `DeletedGlucoseStored`) — highest read volume; uses `ValueObservation` for the
+   live charts.~~ **✅ done (Step 12).** (The last entity; the CD cleanup step follows.)
 
 ## Cleanup (after all entities migrated & proven)
 

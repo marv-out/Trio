@@ -107,35 +107,19 @@ class JSONImporter {
     ///   - JSONImporterError.missingGlucoseValueInGlucoseEntry if a glucose entry is missing a value.
     ///   - An error if the file cannot be read or decoded.
     ///   - An error if the CoreData operation fails.
-    func importGlucoseHistory(url: URL, now: Date) async throws {
+    /// `pool == nil` uses the shared GRDB store; tests pass an in-memory pool.
+    func importGlucoseHistory(url: URL, now: Date, in pool: DatabasePool? = nil) async throws {
         let twentyFourHoursAgo = now - 24.hours.timeInterval
         let glucoseHistoryFull: [BloodGlucose] = try readJsonFile(url: url)
-        let existingDates = try await fetchDates(
-            ofType: GlucoseStored.self,
-            predicate: .predicateForDateBetween(start: twentyFourHoursAgo, end: now),
-            sortKey: "date",
-            dateKeyPath: \.date
-        )
+        // Glucose lives in GRDB; dedupe against the dates already stored in the import window.
+        let existingDates = try await GlucoseStore.existingDates(from: twentyFourHoursAgo, to: now, pool: pool)
 
         // only import glucose values from the last 24 hours that don't exist
         let glucoseHistory = glucoseHistoryFull
             .filter { $0.dateString >= twentyFourHoursAgo && $0.dateString <= now && !existingDates.contains($0.dateString) }
 
-        // Create a background context for batch processing
-        let backgroundContext = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
-        backgroundContext.parent = context
-
-        try await backgroundContext.perform {
-            for glucoseEntry in glucoseHistory {
-                try glucoseEntry.store(in: backgroundContext)
-            }
-
-            try backgroundContext.save()
-        }
-
-        try await context.perform {
-            try self.context.save()
-        }
+        let records = try glucoseHistory.map { try $0.makeGlucoseRecord() }
+        try await GlucoseStore.batchInsert(records, pool: pool)
     }
 
     /// combines tempBasal and tempBasalDuration events into one PumpHistoryEvent
@@ -306,21 +290,23 @@ class JSONImporter {
 // MARK: - Extension for Specific Import Functions
 
 extension BloodGlucose {
-    /// Helper function to convert `BloodGlucose` to `GlucoseStored` while importing JSON glucose entries
-    func store(in context: NSManagedObjectContext) throws {
+    /// Helper function to convert `BloodGlucose` to a `GlucoseRecord` while importing JSON glucose entries.
+    /// Imported readings are marked as already uploaded to all channels (they came *from* a backup).
+    func makeGlucoseRecord() throws -> GlucoseRecord {
         guard let glucoseValue = glucose ?? sgv else {
             throw JSONImporterError.missingGlucoseValueInGlucoseEntry
         }
 
-        let glucoseEntry = GlucoseStored(context: context)
-        glucoseEntry.id = UUID(uuidString: id) ?? UUID()
-        glucoseEntry.date = dateString
-        glucoseEntry.glucose = Int16(glucoseValue)
-        glucoseEntry.direction = direction?.rawValue
-        glucoseEntry.isManual = type == "Manual"
-        glucoseEntry.isUploadedToNS = true
-        glucoseEntry.isUploadedToHealth = true
-        glucoseEntry.isUploadedToTidepool = true
+        return GlucoseRecord(
+            id: UUID(uuidString: id) ?? UUID(),
+            date: dateString,
+            glucose: Int16(glucoseValue),
+            direction: direction?.rawValue,
+            isManual: type == "Manual",
+            isUploadedToNS: true,
+            isUploadedToHealth: true,
+            isUploadedToTidepool: true
+        )
     }
 }
 

@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 struct SelectionPopoverView: ChartContent {
-    let selectedGlucose: GlucoseStored
+    let selectedGlucose: GlucoseRecord
     let selectedIOBValue: OrefDeterminationRecord?
     let selectedCOBValue: OrefDeterminationRecord?
     let units: GlucoseUnits
@@ -78,7 +78,7 @@ struct SelectionPopoverView: ChartContent {
 
             if isSmoothingEnabled, let smoothedGlucose = selectedGlucose.smoothedGlucose {
                 var smoothedGlucoseToDisplay: Decimal {
-                    units == .mgdL ? smoothedGlucose.decimalValue : smoothedGlucose.decimalValue.asMmolL
+                    units == .mgdL ? smoothedGlucose : smoothedGlucose.asMmolL
                 }
                 HStack {
                     Image(systemName: "sparkles")

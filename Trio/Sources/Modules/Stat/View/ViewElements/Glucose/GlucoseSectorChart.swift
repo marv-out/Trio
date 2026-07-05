@@ -1,12 +1,11 @@
 import Charts
-import CoreData
 import SwiftDate
 import SwiftUI
 
 struct GlucoseSectorChart: View {
     let highLimit: Decimal
     let units: GlucoseUnits
-    let glucose: [GlucoseStored]
+    let glucose: [GlucoseRecord]
     let timeInRangeType: TimeInRangeType
     let showChart: Bool
 

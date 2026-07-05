@@ -1,4 +1,3 @@
-import CoreData
 import SwiftDate
 import SwiftUI
 
@@ -9,7 +8,7 @@ struct GlucoseMetricsView: View {
     /// The display unit for estimated HbA1c values.
     let eA1cDisplayUnit: EstimatedA1cDisplayUnit
     /// A list of stored glucose readings.
-    let glucose: [GlucoseStored]
+    let glucose: [GlucoseRecord]
 
     /// The main body of the `GlucoseMetricsView`, displaying glucose-related statistics.
     var body: some View {

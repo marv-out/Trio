@@ -2,7 +2,7 @@ import Charts
 import SwiftUI
 
 struct GlucoseDailyDistributionChart: View {
-    let glucose: [GlucoseStored]
+    let glucose: [GlucoseRecord]
     let highLimit: Decimal
     let units: GlucoseUnits
     let timeInRangeType: TimeInRangeType
@@ -15,7 +15,7 @@ struct GlucoseDailyDistributionChart: View {
     @State private var scrollPosition = Date()
     @State private var selectedDate: Date?
     @State private var updateTimer = Stat.UpdateTimer()
-    @State private var visibleGlucose: [GlucoseStored] = []
+    @State private var visibleGlucose: [GlucoseRecord] = []
 
     // State model for accessing the shared data
     let state: Stat.StateModel
@@ -55,7 +55,7 @@ struct GlucoseDailyDistributionChart: View {
     }
 
     // Compute selected day glucose readings
-    private var selectedDateGlucose: [GlucoseStored] {
+    private var selectedDateGlucose: [GlucoseRecord] {
         guard let selectedDate = selectedDate else { return [] }
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: selectedDate)
@@ -68,7 +68,7 @@ struct GlucoseDailyDistributionChart: View {
     }
 
     // Active glucose data - either selected day or visible range
-    private var activeGlucoseData: [GlucoseStored] {
+    private var activeGlucoseData: [GlucoseRecord] {
         selectedDate != nil ? selectedDateGlucose : visibleGlucose
     }
 

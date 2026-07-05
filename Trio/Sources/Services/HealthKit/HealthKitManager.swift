@@ -1,5 +1,4 @@
 import Combine
-import CoreData
 import Foundation
 import HealthKit
 import LoopKit
@@ -55,33 +54,11 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
     @Injected() private var pumpHistoryStorage: PumpHistoryStorage!
     @Injected() private var deviceDataManager: DeviceDataManager!
 
-    let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-
     // MARK: - Upload triggers
 
-    //
-    // Each upload pipeline is driven by an NSFetchedResultsController whose predicate is the
-    // "not yet uploaded to Health" set. The controller fires whenever un-uploaded items appear
-    // (or drop out after a successful upload), which we use to (re-)trigger the matching upload.
-    // Bound to the viewContext, it also picks up batch-inserted glucose via the persistent history
-    // merge in CoreDataStack — replacing the previous changedObjects publisher plus the separate
-    // glucoseStorage.updatePublisher fallback.
-
-    let glucoseUploadControllerDelegate = FetchedResultsControllerDelegate()
-    private lazy var glucoseUploadController: NSFetchedResultsController<GlucoseStored> = {
-        let request = NSFetchRequest<GlucoseStored>(entityName: "GlucoseStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \GlucoseStored.date, ascending: true)]
-        request.predicate = NSPredicate.glucoseNotYetUploadedToHealth
-        request.fetchBatchSize = 50
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = glucoseUploadControllerDelegate
-        return controller
-    }()
+    // Glucose readings now live in GRDB; the "not yet uploaded to Health" trigger is a ValueObservation
+    // (see registerUploadControllers) instead of an NSFetchedResultsController.
+    private var glucoseUploadObservationCancellable: AnyCancellable?
 
     // Carbs now live in GRDB; the "not yet uploaded to Health" trigger is a ValueObservation
     // (see registerUploadControllers) instead of an FRC.
@@ -107,9 +84,12 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
     }
 
     private func registerUploadControllers() {
-        glucoseUploadControllerDelegate.onContentChange = { [weak self] in
-            Task { await self?.uploadGlucose() }
-        }
+        // Glucose readings live in GRDB: a ValueObservation fires when the not-yet-uploaded-to-Health
+        // set changes, replacing the former NSFetchedResultsController.
+        glucoseUploadObservationCancellable = GlucoseStore.observeNotYetUploadedCount(channel: .health)
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                Task { await self?.uploadGlucose() }
+            })
         // Carbs live in GRDB: a ValueObservation fires when the not-yet-uploaded-to-Health set
         // changes, replacing the former NSFetchedResultsController.
         carbsUploadObservationCancellable = CarbEntryStore.observeNotYetUploadedToHealthCount()
@@ -122,15 +102,6 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
             .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
                 Task { await self?.uploadInsulin() }
             })
-
-        // performFetch must run on the viewContext's queue (main).
-        Task { @MainActor in
-            do {
-                try self.glucoseUploadController.performFetch()
-            } catch {
-                debug(.service, "\(DebuggingIdentifiers.failed) Failed to set up HealthKit upload controllers: \(error)")
-            }
-        }
     }
 
     func checkWriteToHealthPermissions(objectTypeToHealthStore: HKObjectType) -> Bool {
@@ -227,26 +198,13 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
     }
 
     private func updateGlucoseAsUploaded(_ glucose: [BloodGlucose]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateGlucoseAsUploaded"
-        await context.perform {
-            let ids = glucose.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<GlucoseStored> = GlucoseStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToHealth = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToHealth: \(error.userInfo)"
-                )
-            }
+        do {
+            let ids = glucose.map(\.id)
+            try await GlucoseStore.markUploaded(channel: .health, ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToHealth: \(error)"
+            )
         }
     }
 

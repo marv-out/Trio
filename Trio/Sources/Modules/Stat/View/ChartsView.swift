@@ -1,5 +1,4 @@
 import Charts
-import CoreData
 import SwiftDate
 import SwiftUI
 
@@ -10,7 +9,7 @@ struct ChartsView: View {
     let hbA1cDisplayUnit: HbA1cDisplayUnit
     let timeInRangeChartStyle: TimeInRangeChartStyle
 
-    let glucose: [GlucoseStored]
+    let glucose: [GlucoseRecord]
 
     @State var headline: Color = .secondary
 
@@ -41,7 +40,7 @@ struct ChartsView: View {
         units: GlucoseUnits,
         hbA1cDisplayUnit: HbA1cDisplayUnit,
         timeInRangeChartStyle: TimeInRangeChartStyle,
-        glucose: [GlucoseStored]
+        glucose: [GlucoseRecord]
     ) {
         self.highLimit = highLimit
         self.lowLimit = lowLimit

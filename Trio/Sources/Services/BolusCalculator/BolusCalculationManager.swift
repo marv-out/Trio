@@ -185,32 +185,16 @@ final class BaseBolusCalculationManager: BolusCalculationManager, Injectable {
             ?? Preferences(maxIOB: 0, maxCOB: 120)
     }
 
-    /// Fetches recent glucose readings from CoreData
-    /// - Returns: Array of NSManagedObjectIDs for glucose readings
-    private func fetchGlucose() async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchGlucose"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: NSPredicate.glucose,
-            key: "date",
-            ascending: false,
-            fetchLimit: 288
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-            return fetchedResults.map(\.objectID)
-        }
+    /// Fetches recent glucose readings from GRDB (newest first, last 24h, capped at 288).
+    /// - Returns: Array of `GlucoseRecord` value types
+    private func fetchGlucose() async throws -> [GlucoseRecord] {
+        try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, limit: 288)
     }
 
     /// Updates glucose-related variables based on recent readings
-    /// - Parameter objects: Array of GlucoseStored objects
+    /// - Parameter objects: Array of `GlucoseRecord` (newest first)
     /// - Returns: GlucoseVariables containing current blood glucose and delta
-    private func updateGlucoseVariables(with objects: [GlucoseStored]) -> GlucoseVariables {
+    private func updateGlucoseVariables(with objects: [GlucoseRecord]) -> GlucoseVariables {
         // Always use the most recent reading for current glucose regardless of time
         let lastGlucose = objects.first?.glucose ?? 0
 
@@ -311,17 +295,9 @@ final class BaseBolusCalculationManager: BolusCalculationManager, Injectable {
             let maxIOB = preferences.maxIOB
             let maxCOB = preferences.maxCOB
 
-            // Fetch glucose data
-            let glucoseFetchContext = CoreDataStack.shared.newTaskContext()
-            glucoseFetchContext.name = "handleBolusCalculation.glucose"
-            let glucoseIds = try await fetchGlucose()
-            let glucoseObjects: [GlucoseStored] = try await CoreDataStack.shared.getNSManagedObject(
-                with: glucoseIds,
-                context: glucoseFetchContext
-            )
-            let glucoseVars = await glucoseFetchContext.perform {
-                self.updateGlucoseVariables(with: glucoseObjects)
-            }
+            // Fetch glucose data (GRDB value types — no context round-trip)
+            let glucoseObjects = try await fetchGlucose()
+            let glucoseVars = updateGlucoseVariables(with: glucoseObjects)
 
             // Fetch determination data (GRDB value type — no context round-trip)
             let determinationObjects = try await determinationStorage

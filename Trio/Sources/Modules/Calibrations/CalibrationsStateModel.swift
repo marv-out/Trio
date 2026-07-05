@@ -1,4 +1,3 @@
-import CoreData
 import Observation
 import SwiftDate
 import SwiftUI
@@ -17,9 +16,6 @@ extension Calibrations {
 
         var units: GlucoseUnits = .mgdL
 
-        let backgroundContext = CoreDataStack.shared.newTaskContext()
-        private let viewContext = CoreDataStack.shared.persistentContainer.viewContext
-
         override func subscribe() {
             units = settingsManager.settings.units
             calibrate = calibrationService.calibrate
@@ -35,26 +31,6 @@ extension Calibrations {
             }
         }
 
-        /// - Returns: An array of NSManagedObjectIDs for glucose readings.
-        private func fetchGlucose() async throws -> [NSManagedObjectID] {
-            let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-                ofType: GlucoseStored.self,
-                onContext: backgroundContext,
-                predicate: NSPredicate.predicateFor20MinAgo,
-                key: "date",
-                ascending: false,
-                fetchLimit: 1 /// We only need the last value
-            )
-
-            return try await backgroundContext.perform {
-                guard let glucoseResults = results as? [GlucoseStored] else {
-                    throw CoreDataError.fetchError(function: #function, file: #file)
-                }
-
-                return glucoseResults.map(\.objectID)
-            }
-        }
-
         @MainActor func addCalibration() async {
             do {
                 defer {
@@ -67,11 +43,10 @@ extension Calibrations {
                     glucose = newCalibration.asMgdL
                 }
 
-                let glucoseValuesIds = try await fetchGlucose()
-                let glucoseObjects: [GlucoseStored] = try await CoreDataStack.shared
-                    .getNSManagedObject(with: glucoseValuesIds, context: viewContext)
+                // Fetch the single most-recent non-stale reading from GRDB (within 20 minutes)
+                let records = try await GlucoseStore.fetch(from: Date.twentyMinutesAgo, ascending: false, limit: 1)
 
-                if let lastGlucose = glucoseObjects.first {
+                if let lastGlucose = records.first {
                     let unfiltered = lastGlucose.glucose
                     let calibration = Calibration(x: Double(unfiltered), y: Double(glucose))
 

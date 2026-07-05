@@ -431,43 +431,34 @@ final class BaseAPSManager: APSManager, Injectable {
 
         var invalidGlucoseError: String?
 
-        // Fetch glucose and run validation on the same context to avoid cross-context property access.
-        let validationContext = CoreDataStack.shared.newTaskContext()
-        validationContext.name = "determineBasal.validation"
+        // Fetch glucose (GRDB value types, newest first) and run validation.
+        let isValidGlucoseData: Bool
+        do {
+            let glucose = try await GlucoseStore.fetch(from: Date.oneHourAgo, ascending: false, limit: 6)
 
-        let isValidGlucoseData = await validationContext.perform { [weak self] in
-            guard let self else { return false }
-
-            let glucose: [GlucoseStored]
-            do {
-                glucose = try self.fetchGlucose(
-                    on: validationContext,
-                    predicate: NSPredicate.predicateForOneHourAgo,
-                    fetchLimit: 6
-                )
-            } catch {
-                debug(.apsManager, "Failed to fetch glucose for validation: \(error)")
-                return false
-            }
-
-            guard glucose.count > 2 else {
+            if glucose.count <= 2 {
                 debug(.apsManager, "Not enough glucose data")
                 invalidGlucoseError =
                     String(
                         localized: "Not enough glucose data. You need at least three glucose readings in the last six hours to run the algorithm."
                     )
-                return false
+                isValidGlucoseData = false
+            } else {
+                let dateOfLastGlucose = glucose.first?.date
+                if dateOfLastGlucose ?? Date() >= Date().addingTimeInterval(-12.minutes.timeInterval) {
+                    isValidGlucoseData = true
+                } else {
+                    debug(.apsManager, "Glucose data is stale")
+                    invalidGlucoseError =
+                        String(
+                            localized: "Glucose data is stale. The most recent glucose reading is from more than 12 minutes ago."
+                        )
+                    isValidGlucoseData = false
+                }
             }
-
-            let dateOfLastGlucose = glucose.first?.date
-            guard dateOfLastGlucose ?? Date() >= Date().addingTimeInterval(-12.minutes.timeInterval) else {
-                debug(.apsManager, "Glucose data is stale")
-                invalidGlucoseError =
-                    String(localized: "Glucose data is stale. The most recent glucose reading is from more than 12 minutes ago.")
-                return false
-            }
-
-            return true
+        } catch {
+            debug(.apsManager, "Failed to fetch glucose for validation: \(error)")
+            isValidGlucoseData = false
         }
 
         do {
@@ -798,9 +789,8 @@ final class BaseAPSManager: APSManager, Injectable {
         return Double(sorted[length / 2])
     }
 
-    /// Computes Time-in-Range statistics. Must be called from within a
-    /// `perform`/`performAndWait` block on the context that owns `glucose`.
-    private func tir(_ glucose: [GlucoseStored]) -> (TIR: Double, hypos: Double, hypers: Double, normal_: Double) {
+    /// Computes Time-in-Range statistics over GRDB glucose records.
+    private func tir(_ glucose: [GlucoseRecord]) -> (TIR: Double, hypos: Double, hypers: Double, normal_: Double) {
         let justGlucoseArray = glucose.compactMap({ each in Int(each.glucose as Int16) })
         let totalReadings = justGlucoseArray.count
         let highLimit = settingsManager.settings.high
@@ -825,7 +815,7 @@ final class BaseAPSManager: APSManager, Injectable {
         )
     }
 
-    private func glucoseStats(_ fetchedGlucose: [GlucoseStored])
+    private func glucoseStats(_ fetchedGlucose: [GlucoseRecord])
         -> (ifcc: Double, ngsp: Double, average: Double, median: Double, sd: Double, cv: Double, readings: Double)
     {
         let glucose = fetchedGlucose
@@ -917,28 +907,6 @@ final class BaseAPSManager: APSManager, Injectable {
         return output
     }
 
-    /// Synchronously fetches glucose on the given context. Must be called from within a `perform`/`performAndWait` block of that context
-    func fetchGlucose(
-        on context: NSManagedObjectContext,
-        predicate: NSPredicate,
-        fetchLimit: Int? = nil,
-        batchSize: Int? = nil
-    ) throws -> [GlucoseStored] {
-        let results = try CoreDataStack.shared.fetchEntities(
-            ofType: GlucoseStored.self,
-            onContext: context,
-            predicate: predicate,
-            key: "date",
-            ascending: false,
-            fetchLimit: fetchLimit,
-            batchSize: batchSize
-        )
-        guard let glucoseResults = results as? [GlucoseStored] else {
-            throw CoreDataError.fetchError(function: #function, file: #file)
-        }
-        return glucoseResults
-    }
-
     private func loopStats(oneDayGlucose: Double) async -> LoopCycles {
         do {
             let lsr = try await LoopStatStore.forCycleStats(since: Date().addingTimeInterval(-24.hours.timeInterval))
@@ -990,147 +958,123 @@ final class BaseAPSManager: APSManager, Injectable {
         hbs: Durations,
         variance: Variance
     )? {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "glucoseForStats"
         do {
-            return try await context.perform {
-                // Fetch all windows on the same context so subsequent property access is safe.
-                let glucose24h = try self.fetchGlucose(
-                    on: context,
-                    predicate: NSPredicate.predicateForOneDayAgo,
-                    fetchLimit: 288,
-                    batchSize: 50
-                )
-                let glucoseOneWeek = try self.fetchGlucose(
-                    on: context,
-                    predicate: NSPredicate.predicateForOneWeek,
-                    fetchLimit: 288 * 7,
-                    batchSize: 250
-                )
-                let glucoseOneMonth = try self.fetchGlucose(
-                    on: context,
-                    predicate: NSPredicate.predicateForOneMonth,
-                    fetchLimit: 288 * 7 * 30,
-                    batchSize: 500
-                )
-                let glucoseThreeMonths = try self.fetchGlucose(
-                    on: context,
-                    predicate: NSPredicate.predicateForThreeMonths,
-                    fetchLimit: 288 * 7 * 30 * 3,
-                    batchSize: 1000
-                )
+            // Fetch all windows from GRDB (value types, newest first).
+            let glucose24h = try await GlucoseStore.fetchForStats(from: Date.oneDayAgo)
+            let glucoseOneWeek = try await GlucoseStore.fetchForStats(from: Date.oneWeekAgo)
+            let glucoseOneMonth = try await GlucoseStore.fetchForStats(from: Date.oneMonthAgo)
+            let glucoseThreeMonths = try await GlucoseStore.fetchForStats(from: Date.threeMonthsAgo)
 
-                let units = self.settingsManager.settings.units
+            let units = settingsManager.settings.units
 
-                // First date
-                let previous = glucoseThreeMonths.last?.date ?? Date()
-                // Last date (recent)
-                let current = glucoseThreeMonths.first?.date ?? Date()
-                // Total time in days
-                let numberOfDays = (current - previous).timeInterval / 8.64E4
+            // First date
+            let previous = glucoseThreeMonths.last?.date ?? Date()
+            // Last date (recent)
+            let current = glucoseThreeMonths.first?.date ?? Date()
+            // Total time in days
+            let numberOfDays = (current - previous).timeInterval / 8.64E4
 
-                // Get glucose computations for every case
-                let oneDayGlucose = self.glucoseStats(glucose24h)
-                let sevenDaysGlucose = self.glucoseStats(glucoseOneWeek)
-                let thirtyDaysGlucose = self.glucoseStats(glucoseOneMonth)
-                let totalDaysGlucose = self.glucoseStats(glucoseThreeMonths)
+            // Get glucose computations for every case
+            let oneDayGlucose = glucoseStats(glucose24h)
+            let sevenDaysGlucose = glucoseStats(glucoseOneWeek)
+            let thirtyDaysGlucose = glucoseStats(glucoseOneMonth)
+            let totalDaysGlucose = glucoseStats(glucoseThreeMonths)
 
-                let median = Durations(
-                    day: self.roundDecimal(Decimal(oneDayGlucose.median), 1),
-                    week: self.roundDecimal(Decimal(sevenDaysGlucose.median), 1),
-                    month: self.roundDecimal(Decimal(thirtyDaysGlucose.median), 1),
-                    total: self.roundDecimal(Decimal(totalDaysGlucose.median), 1)
-                )
+            let median = Durations(
+                day: roundDecimal(Decimal(oneDayGlucose.median), 1),
+                week: roundDecimal(Decimal(sevenDaysGlucose.median), 1),
+                month: roundDecimal(Decimal(thirtyDaysGlucose.median), 1),
+                total: roundDecimal(Decimal(totalDaysGlucose.median), 1)
+            )
 
-                let eA1cDisplayUnit = self.settingsManager.settings.eA1cDisplayUnit
+            let eA1cDisplayUnit = settingsManager.settings.eA1cDisplayUnit
 
-                let hbs = Durations(
-                    day: eA1cDisplayUnit == .mmolMol ?
-                        self.roundDecimal(Decimal(oneDayGlucose.ifcc), 1) :
-                        self.roundDecimal(Decimal(oneDayGlucose.ngsp), 1),
-                    week: eA1cDisplayUnit == .mmolMol ?
-                        self.roundDecimal(Decimal(sevenDaysGlucose.ifcc), 1) :
-                        self.roundDecimal(Decimal(sevenDaysGlucose.ngsp), 1),
-                    month: eA1cDisplayUnit == .mmolMol ?
-                        self.roundDecimal(Decimal(thirtyDaysGlucose.ifcc), 1) :
-                        self.roundDecimal(Decimal(thirtyDaysGlucose.ngsp), 1),
-                    total: eA1cDisplayUnit == .mmolMol ?
-                        self.roundDecimal(Decimal(totalDaysGlucose.ifcc), 1) :
-                        self.roundDecimal(Decimal(totalDaysGlucose.ngsp), 1)
-                )
+            let hbs = Durations(
+                day: eA1cDisplayUnit == .mmolMol ?
+                    roundDecimal(Decimal(oneDayGlucose.ifcc), 1) :
+                    roundDecimal(Decimal(oneDayGlucose.ngsp), 1),
+                week: eA1cDisplayUnit == .mmolMol ?
+                    roundDecimal(Decimal(sevenDaysGlucose.ifcc), 1) :
+                    roundDecimal(Decimal(sevenDaysGlucose.ngsp), 1),
+                month: eA1cDisplayUnit == .mmolMol ?
+                    roundDecimal(Decimal(thirtyDaysGlucose.ifcc), 1) :
+                    roundDecimal(Decimal(thirtyDaysGlucose.ngsp), 1),
+                total: eA1cDisplayUnit == .mmolMol ?
+                    roundDecimal(Decimal(totalDaysGlucose.ifcc), 1) :
+                    roundDecimal(Decimal(totalDaysGlucose.ngsp), 1)
+            )
 
-                var oneDay_: (TIR: Double, hypos: Double, hypers: Double, normal_: Double) = (0.0, 0.0, 0.0, 0.0)
-                var sevenDays_: (TIR: Double, hypos: Double, hypers: Double, normal_: Double) = (0.0, 0.0, 0.0, 0.0)
-                var thirtyDays_: (TIR: Double, hypos: Double, hypers: Double, normal_: Double) = (0.0, 0.0, 0.0, 0.0)
-                var totalDays_: (TIR: Double, hypos: Double, hypers: Double, normal_: Double) = (0.0, 0.0, 0.0, 0.0)
-                // Get TIR computations for every case
-                oneDay_ = self.tir(glucose24h)
-                sevenDays_ = self.tir(glucoseOneWeek)
-                thirtyDays_ = self.tir(glucoseOneMonth)
-                totalDays_ = self.tir(glucoseThreeMonths)
+            var oneDay_: (TIR: Double, hypos: Double, hypers: Double, normal_: Double) = (0.0, 0.0, 0.0, 0.0)
+            var sevenDays_: (TIR: Double, hypos: Double, hypers: Double, normal_: Double) = (0.0, 0.0, 0.0, 0.0)
+            var thirtyDays_: (TIR: Double, hypos: Double, hypers: Double, normal_: Double) = (0.0, 0.0, 0.0, 0.0)
+            var totalDays_: (TIR: Double, hypos: Double, hypers: Double, normal_: Double) = (0.0, 0.0, 0.0, 0.0)
+            // Get TIR computations for every case
+            oneDay_ = self.tir(glucose24h)
+            sevenDays_ = self.tir(glucoseOneWeek)
+            thirtyDays_ = self.tir(glucoseOneMonth)
+            totalDays_ = self.tir(glucoseThreeMonths)
 
-                let tir = Durations(
-                    day: self.roundDecimal(Decimal(oneDay_.TIR), 1),
-                    week: self.roundDecimal(Decimal(sevenDays_.TIR), 1),
-                    month: self.roundDecimal(Decimal(thirtyDays_.TIR), 1),
-                    total: self.roundDecimal(Decimal(totalDays_.TIR), 1)
-                )
-                let hypo = Durations(
-                    day: Decimal(oneDay_.hypos),
-                    week: Decimal(sevenDays_.hypos),
-                    month: Decimal(thirtyDays_.hypos),
-                    total: Decimal(totalDays_.hypos)
-                )
-                let hyper = Durations(
-                    day: Decimal(oneDay_.hypers),
-                    week: Decimal(sevenDays_.hypers),
-                    month: Decimal(thirtyDays_.hypers),
-                    total: Decimal(totalDays_.hypers)
-                )
-                let normal = Durations(
-                    day: Decimal(oneDay_.normal_),
-                    week: Decimal(sevenDays_.normal_),
-                    month: Decimal(thirtyDays_.normal_),
-                    total: Decimal(totalDays_.normal_)
-                )
-                let range = Threshold(
-                    low: units == .mmolL ? self.roundDecimal(self.settingsManager.settings.low.asMmolL, 1) :
-                        self.roundDecimal(self.settingsManager.settings.low, 0),
-                    high: units == .mmolL ? self.roundDecimal(self.settingsManager.settings.high.asMmolL, 1) :
-                        self.roundDecimal(self.settingsManager.settings.high, 0)
-                )
-                let TimeInRange = TIRs(
-                    TIR: tir,
-                    Hypos: hypo,
-                    Hypers: hyper,
-                    Threshold: range,
-                    Euglycemic: normal
-                )
-                let avgs = Durations(
-                    day: self.roundDecimal(Decimal(oneDayGlucose.average), 1),
-                    week: self.roundDecimal(Decimal(sevenDaysGlucose.average), 1),
-                    month: self.roundDecimal(Decimal(thirtyDaysGlucose.average), 1),
-                    total: self.roundDecimal(Decimal(totalDaysGlucose.average), 1)
-                )
-                let avg = Averages(Average: avgs, Median: median)
-                // Standard Deviations
-                let standardDeviations = Durations(
-                    day: self.roundDecimal(Decimal(oneDayGlucose.sd), 1),
-                    week: self.roundDecimal(Decimal(sevenDaysGlucose.sd), 1),
-                    month: self.roundDecimal(Decimal(thirtyDaysGlucose.sd), 1),
-                    total: self.roundDecimal(Decimal(totalDaysGlucose.sd), 1)
-                )
-                // CV = standard deviation / sample mean x 100
-                let cvs = Durations(
-                    day: self.roundDecimal(Decimal(oneDayGlucose.cv), 1),
-                    week: self.roundDecimal(Decimal(sevenDaysGlucose.cv), 1),
-                    month: self.roundDecimal(Decimal(thirtyDaysGlucose.cv), 1),
-                    total: self.roundDecimal(Decimal(totalDaysGlucose.cv), 1)
-                )
-                let variance = Variance(SD: standardDeviations, CV: cvs)
+            let tir = Durations(
+                day: roundDecimal(Decimal(oneDay_.TIR), 1),
+                week: roundDecimal(Decimal(sevenDays_.TIR), 1),
+                month: roundDecimal(Decimal(thirtyDays_.TIR), 1),
+                total: roundDecimal(Decimal(totalDays_.TIR), 1)
+            )
+            let hypo = Durations(
+                day: Decimal(oneDay_.hypos),
+                week: Decimal(sevenDays_.hypos),
+                month: Decimal(thirtyDays_.hypos),
+                total: Decimal(totalDays_.hypos)
+            )
+            let hyper = Durations(
+                day: Decimal(oneDay_.hypers),
+                week: Decimal(sevenDays_.hypers),
+                month: Decimal(thirtyDays_.hypers),
+                total: Decimal(totalDays_.hypers)
+            )
+            let normal = Durations(
+                day: Decimal(oneDay_.normal_),
+                week: Decimal(sevenDays_.normal_),
+                month: Decimal(thirtyDays_.normal_),
+                total: Decimal(totalDays_.normal_)
+            )
+            let range = Threshold(
+                low: units == .mmolL ? roundDecimal(settingsManager.settings.low.asMmolL, 1) :
+                    roundDecimal(settingsManager.settings.low, 0),
+                high: units == .mmolL ? roundDecimal(settingsManager.settings.high.asMmolL, 1) :
+                    roundDecimal(settingsManager.settings.high, 0)
+            )
+            let TimeInRange = TIRs(
+                TIR: tir,
+                Hypos: hypo,
+                Hypers: hyper,
+                Threshold: range,
+                Euglycemic: normal
+            )
+            let avgs = Durations(
+                day: roundDecimal(Decimal(oneDayGlucose.average), 1),
+                week: roundDecimal(Decimal(sevenDaysGlucose.average), 1),
+                month: roundDecimal(Decimal(thirtyDaysGlucose.average), 1),
+                total: roundDecimal(Decimal(totalDaysGlucose.average), 1)
+            )
+            let avg = Averages(Average: avgs, Median: median)
+            // Standard Deviations
+            let standardDeviations = Durations(
+                day: roundDecimal(Decimal(oneDayGlucose.sd), 1),
+                week: roundDecimal(Decimal(sevenDaysGlucose.sd), 1),
+                month: roundDecimal(Decimal(thirtyDaysGlucose.sd), 1),
+                total: roundDecimal(Decimal(totalDaysGlucose.sd), 1)
+            )
+            // CV = standard deviation / sample mean x 100
+            let cvs = Durations(
+                day: roundDecimal(Decimal(oneDayGlucose.cv), 1),
+                week: roundDecimal(Decimal(sevenDaysGlucose.cv), 1),
+                month: roundDecimal(Decimal(thirtyDaysGlucose.cv), 1),
+                total: roundDecimal(Decimal(totalDaysGlucose.cv), 1)
+            )
+            let variance = Variance(SD: standardDeviations, CV: cvs)
 
-                return (oneDayGlucose, eA1cDisplayUnit, numberOfDays, TimeInRange, avg, hbs, variance)
-            }
+            return (oneDayGlucose, eA1cDisplayUnit, numberOfDays, TimeInRange, avg, hbs, variance)
         } catch {
             debug(
                 .apsManager,
