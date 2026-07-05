@@ -185,10 +185,11 @@ final class BaseBolusCalculationManager: BolusCalculationManager, Injectable {
             ?? Preferences(maxIOB: 0, maxCOB: 120)
     }
 
-    /// Fetches recent glucose readings from GRDB (newest first, last 24h, capped at 288).
+    /// Fetches recent glucose readings from GRDB (newest first, last 24h). (`dev` dropped the former
+    /// `fetchLimit: 288`; only `.first` and the 20-minute delta window are used, so it has no effect.)
     /// - Returns: Array of `GlucoseRecord` value types
     private func fetchGlucose() async throws -> [GlucoseRecord] {
-        try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, limit: 288)
+        try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false)
     }
 
     /// Updates glucose-related variables based on recent readings

@@ -359,10 +359,11 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         }
     }
 
-    /// Fetches recent glucose readings from GRDB (newest first, last 24h, capped at 288).
+    /// Fetches recent glucose readings from GRDB (newest first, last 24h). (`dev` dropped the former
+    /// `fetchLimit: 288`; the 24h window already bounds the result.)
     /// - Returns: Array of `GlucoseRecord` value types
     private func fetchGlucose() async throws -> [GlucoseRecord] {
-        try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, limit: 288)
+        try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false)
     }
 
     /// Gets the active bolus amount by fetching the last (active) non-external bolus from GRDB. The

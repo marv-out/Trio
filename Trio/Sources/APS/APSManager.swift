@@ -959,8 +959,10 @@ final class BaseAPSManager: APSManager, Injectable {
         variance: Variance
     )? {
         do {
-            // Fetch all windows from GRDB (value types, newest first).
-            let glucose24h = try await GlucoseStore.fetchForStats(from: Date.oneDayAgo)
+            // Fetch all windows from GRDB (value types, newest first). Honors `dev`'s fetch-limit fix:
+            // only the 24h window is capped (288 ≈ a full day at 5-min cadence); the longer windows are
+            // bounded by their date range.
+            let glucose24h = try await GlucoseStore.fetch(from: Date.oneDayAgo, ascending: false, limit: 288)
             let glucoseOneWeek = try await GlucoseStore.fetchForStats(from: Date.oneWeekAgo)
             let glucoseOneMonth = try await GlucoseStore.fetchForStats(from: Date.oneMonthAgo)
             let glucoseThreeMonths = try await GlucoseStore.fetchForStats(from: Date.threeMonthsAgo)

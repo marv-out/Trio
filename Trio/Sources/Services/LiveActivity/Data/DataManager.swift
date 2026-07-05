@@ -6,9 +6,9 @@ import Foundation
 @available(iOS 16.2, *)
 extension LiveActivityManager {
     func fetchAndMapGlucose() async throws -> [GlucoseData] {
-        // Glucose moved to GRDB: the newest 72 readings within the last 6 hours (matches the former
-        // `predicateForSixHoursAgo` + limit 72), newest first.
-        let records = try await GlucoseStore.fetch(from: Date.sixHoursAgo, ascending: false, limit: 72)
+        // Glucose moved to GRDB: the readings within the last 6 hours, newest first. (`dev` dropped the
+        // former `fetchLimit: 72` here; the 6-hour window already bounds the result.)
+        let records = try await GlucoseStore.fetch(from: Date.sixHoursAgo, ascending: false)
         return records.map {
             GlucoseData(glucose: Int($0.glucose), date: $0.date ?? Date(), direction: $0.directionEnum)
         }
