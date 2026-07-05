@@ -814,12 +814,164 @@ Core Data `contextProvider` for `PumpHistoryStorage`.
 
 </details>
 
+### 🔧 Step 12 — `GlucoseStored` + `DeletedGlucoseStored` (planned, not yet implemented)
+
+The **highest read/write-volume entity** and the last one to migrate. A new reading arrives every ~5
+minutes and is read by the live charts, every algorithm run, three upload channels, and a fan of
+"latest glucose" consumers (Live Activity, Watch, Garmin, Calendar, notifications, contact image).
+Both entities are **standalone** (verified against the `.xcdatamodel`: zero relationships), so this is
+structurally simple — no FKs, no tree — but the **surface is the broadest of the migration** (~25 files)
+and the reactivity fan-out is the real design problem. `DeletedGlucoseStored` (the deferred 9b) is
+folded in here: it is a tiny tombstone the glucose delete path writes and the backfill dedup reads, so
+it ships with glucose. Mirror Steps 7–11 for the record/store/observation patterns; the deltas below are
+what makes glucose different. Full call-site map (line-level) lives in the PR notes.
+
+⚠️ **Cross-process risk — RESOLVED (measured, not assumed).** The long-standing open item ("widgets /
+Live Activities read the store") does **not** apply to glucose: extensions never read Core Data
+directly. The Core Data store lives in the app's private Documents directory (not the App Group), and
+the widget / Live Activity / Watch / Garmin surfaces all receive glucose via a **push model**
+(ActivityKit `ContentState`, WatchConnectivity, ConnectIQ) fed by in-app managers. Every
+`GlucoseStored` reader is in-process. So no `DatabaseRegionObservation` + Darwin-notification
+cross-process observation is needed — the in-app `ValueObservation` pattern from Steps 3/10/11 is
+sufficient. (GRDB's file *does* live in the App Group container, which is harmless here and leaves the
+door open if an extension ever needs direct reads.)
+
+#### Records (`Model/GRDB/GlucoseRecord.swift`)
+
+- `GlucoseRecord` — `id` (UUID, stored as TEXT), `date` (Date?), `glucose` (Int16), `direction`
+  (String?), `isManual` (Bool), the **one Decimal** `smoothedGlucose` stored as TEXT (lossless, like
+  `TDDRecord`), and the three upload flags `isUploadedToNS` / `isUploadedToHealth` /
+  `isUploadedToTidepool`. `pk` = rowid. `Hashable`/`Identifiable`. **`MutablePersistableRecord`** (the
+  smoothing pass reads `pk` back to update `smoothedGlucose`). Because of the single Decimal, use a
+  manual `init(row:)` + `encode(to container:)` (like `TDDRecord`/`BolusRecord`), not plain `Codable`.
+  Port the `directionEnum` helper (`BloodGlucose.Direction(rawValue: direction)`) onto the record — the
+  chart/history/current-glucose views read it for the trend arrow.
+- `DeletedGlucoseRecord` — `date` (Date, non-optional), `glucose` (Int16), `isManualGlucoseEntry`
+  (Bool). `pk` = rowid. No Decimals → plain `Codable` GRDB record works (like `ContactImageRecord`).
+  `MutablePersistableRecord`.
+
+#### Schema v11 + `GlucoseMigration` (+ `DeletedGlucoseMigration`)
+
+Two tables: `glucoseStored` (indexes on `date`, `isManual`, and each of the three `isUploadedTo*`
+flags — mirroring the Core Data fetch indexes) and `deletedGlucoseStored` (index on `date`). Both are
+straight row-for-row copies (no relationships). Register in `GRDBStack.bootstrap()` after
+`PumpEventMigration`, gated `grdb.didMigrateGlucose` / `grdb.didMigrateDeletedGlucose` (two flags, or
+one migration file covering both tables — prefer two files for symmetry with the entity split).
+
+#### Store API (`GlucoseStore` / `DeletedGlucoseStore`)
+
+`GlucoseStore`:
+- `store(_:)` / `batchInsert(_:)` — replaces `storeGlucoseRegular` **and** the `NSBatchInsertRequest`
+  path with inserts in one `write`. ⚠️ **Ingest dedup (Step 11 lesson).** `storeGlucose` and
+  `backfillGlucose` filter incoming readings via `filterGlucoseValues` against existing rows using a
+  **time buffer** (1s for store, 3.5 min for backfill) — this is proximity matching, not exact-date
+  equality, so it is *less* fragile than the pump `(timestamp,type)` case, but the comparison must still
+  run against the DB-stored (millisecond) dates, not raw sub-millisecond `Date`s. Provide
+  `existingDates(from:to:)` (like `CarbEntryStore.existingDates`) and keep the buffer filter in Swift;
+  do **not** reintroduce an exact-date in-memory key.
+- `addManualGlucose(_:)` — the manual-entry insert (`isManual = true`).
+- `fetchLatest(within: 20min)` (`fetchLatestGlucose` / the `alarm` path — keep a synchronous
+  `fetchLatestSync()` for the `alarm` computed property, mirroring `OrefDeterminationStore.fetchLatestSync()`).
+- `fetchForChart()` (Home/Treatments/History, `date >= oneDayAgo`, ascending — see the Step 11 ordering
+  note), `fetchForStats(from:)` (the day/week/month/total windows), `fetchForAlgorithm(from:limit:)`
+  (the oref window; returns records so `fetchAndProcessGlucose` maps them), `fetchForSmoothing(limit: 350)`
+  (newest non-manual, chronological) + `updateSmoothed(_ pairs: [(pk: Int64, value: Decimal)])`.
+- `fetchNotYetUploaded(channel:manualOnly:)` for the 3 channels (+ the manual-only Health/Tidepool
+  variants), `markUploaded(channel:ids:[UUID])` (all three channels match on `id` — Tidepool's
+  `syncIdentifier` *is* the `id`).
+- `delete(pk:)` — deletes the reading **and** inserts a `DeletedGlucoseRecord` tombstone in one
+  transaction (the current `deleteGlucose` behavior).
+- `deleteOlderThan(days: 90)`.
+- Observations: **one shared `observeLatestChanged()`** (`.share()`/multicast) that the six latest-glucose
+  consumers subscribe to (see fan-out below); `observeForChart()` (Home/Treatments/History); and
+  `observeNotYetUploadedCount(channel:)` for the 3 upload triggers.
+
+`DeletedGlucoseStore`: `store(_:)`, `existingDates(from:to:)` / `existsAround(date:buffer:)` (the backfill
+tombstone dedup), `deleteOlderThan(days: 90)`. **No upload path** — the Nightscout *remote* delete is
+done synchronously in the delete flow by the manager reading the live `GlucoseStored` `id`/`date` before
+deletion (`deleteGlucoseFromNightscout(withID:withDate:)` / `deleteGlucoseFromHealth(withSyncID:)`), not
+via the tombstone. The tombstone exists **only** to stop a deleted reading from being re-ingested by a
+later backfill.
+
+#### Identity / call sites (~25 files)
+
+- **Storage.** `BaseGlucoseStorage` drops `makeContext`/`contextProvider` and deals in records:
+  `storeGlucose`/`backfillGlucose` (dedup via GRDB), `addManualGlucose`, the 5 not-yet-uploaded getters
+  (`getGlucoseNotYetUploadedTo{NS,Health,Tidepool}` + the two manual variants → `fetchNotYetUploaded`),
+  `deleteGlucose` → `delete(pk:)`, `fetchLatestGlucose`/`alarm`. `storeCGMState` (JSON `FileStorage`,
+  **not** Core Data) stays as-is. Keep `updatePublisher` as the "changed" signal for any non-observation
+  subscriber.
+- **Ingest.** `FetchGlucoseManager.glucoseStoreAndHeartDecision` (store/backfill), and the exponential-
+  smoothing pass: `fetchGlucose` (350 newest non-manual) + `applyExponentialSmoothingAndStore` →
+  `GlucoseStore.fetchForSmoothing` + `updateSmoothed` (drop the objectID materialization). CGM plugin
+  (`PluginSource`) unchanged apart from the storage calls.
+- **oref read.** `OpenAPS.fetchAndProcessGlucose` pre-fetches `[GlucoseRecord]` via the store (already
+  async), then maps to `AlgorithmGlucose`. **Preserve the smoothing selection exactly:** smoothed value
+  only for non-manual readings with a non-zero `smoothedGlucose`, else the raw value; manual readings
+  always use the raw value (Trio issue #1054).
+- **Reactivity — charts.** `HomeStateModel.glucoseController` FRC → `observeForChart()` (see a new
+  `GlucoseSetup`); `glucoseFromPersistence`/`latestTwoGlucoseValues` → `[GlucoseRecord]`.
+  `TreatmentsStateModel.glucoseController` likewise. The chart views (`GlucoseChartView`,
+  `SelectionPopoverView`, `CurrentGlucoseView`, `CarbView`, `InsulinView`, `MainChartHelper.timeToNearestGlucose`)
+  move to `[GlucoseRecord]` (reads `glucose`/`date`/`isManual`/`smoothedGlucose`/`directionEnum`).
+- **Reactivity — the fan-out (the central risk).** The **five** `coreDataPublisher.filteredByEntityName("GlucoseStored")`
+  sinks — `LiveActivityManager`, `AppleWatchManager`, `GarminManager` (500 ms debounce),
+  `CalendarManager`, `UserNotificationsManager` — plus the `ContactImageManager` fetch-on-trigger, all
+  want "latest glucose changed". Subscribe them to **one shared `GlucoseStore.observeLatestChanged()`**
+  (`.share()`), not six independent `ValueObservation`s that each re-run on every 5-minute write. Their
+  fetch bodies (`DataManager.fetchAndMapGlucose`, `AppleWatchManager.fetchGlucose`, `GarminManager.fetchGlucose`,
+  `CalendarManager.fetchGlucose`, `ContactImageManager.fetchGlucose`) → store fetches returning records
+  (drop the objectID → `context.object(with:)` materialization).
+- **Reads.** `BolusCalculationManager` (`glucose`, limit 288) and `StateIntentRequest` (limit 2) →
+  store fetches.
+- **History.** `HistoryRootView` `@FetchRequest` (`glucoseStored`, descending) → a `History.StateModel`
+  observation; `HistoryRootView+Glucose` list reads off records; `HistoryDeletionTarget.glucose(GlucoseStored)`
+  → `.glucose(GlucoseRecord)` (dedup on `pk`); `HistoryStateModel+Glucose.deleteGlucoseFromServices`
+  reads `id`/`date` for the remote-service deletes, then `GlucoseStore.delete(pk:)`.
+- **Stat.** `StatStateModel.setupGlucoseArray`/`fetchGlucose` + `GlucoseStatsSetup` (distribution /
+  percentile structs hold `[GlucoseRecord]`) → `GlucoseStore.fetchForStats`.
+- **Uploads.** NS/Health/Tidepool `glucoseUploadController` FRCs → `observeNotYetUploadedCount(channel:)`
+  (wire in each manager's controller setup, drop the `performFetch`); `updateGlucoseAsUploaded` →
+  `markUploaded(channel:ids:)`. The `BloodGlucose`/`StoredGlucoseSample` DTO mapping and the manual→`mbg`
+  Nightscout mapping are unchanged apart from reading off records.
+
+#### Preserve exactly (intentional quirks)
+
+- The smoothed-vs-raw selection in `fetchAndProcessGlucose` (#1054), `clampToMinimum`,
+  `filterTooFrequentGlucose`, the 3.5-min backfill buffer, and the `DeletedGlucoseStored` tombstone dedup.
+- `directionEnum` mapping and the "HIGH at 400" current-glucose display.
+- Manual readings upload to Nightscout as `mbg` (type `"mbg"`), CGM readings as `sgv`.
+- The batch-insert `updateSubject.send()` signal (regular saves relied on Core Data notifications; GRDB
+  observation replaces that, but keep `updatePublisher` for any remaining plain subscriber).
+
+#### Cleanup parity / tests
+
+`TrioApp`: `batchDeleteOlderThan(GlucoseStored, date, 90)` + `batchDeleteOlderThan(DeletedGlucoseStored,
+date, 90)` → `GlucoseStore.deleteOlderThan(days: 90)` + `DeletedGlucoseStore.deleteOlderThan(days: 90)`.
+Rewrite `GlucoseStorageTests` against an in-memory pool (store/backfill dedup incl. the tombstone, the
+5 not-yet-uploaded fetches incl. manual variants, delete-writes-tombstone, smoothing update, Decimal
+round-trip); route `JSONImporter.importGlucoseHistory` through an `in pool:` seam + `makeGlucoseRecord`
+and update the `JSONImporterTests` glucose cases. `TestAssembly` drops the Core Data `contextProvider`
+for `GlucoseStorage`.
+
+#### Open risk
+
+- **Observation fan-out.** The dominant concern given the write frequency. Land the single shared
+  latest-glucose observation and verify on device that the chart, Live Activity, Watch, Garmin, calendar,
+  and notifications all update within the expected latency and that CPU/battery from re-running queries is
+  acceptable.
+- **Ingest dedup precision** (Step 11 lesson): keep the buffer-based dedup against DB-stored dates; never
+  key on exact sub-millisecond `Date` equality.
+- **Last entity.** After glucose is proven in the field, the **CD cleanup step** (remove the migrated
+  entities from the model, delete the generated classes + dead helpers, and remove
+  `eraseDatabaseOnSchemaChange`) can run.
+
 ### ⏳ After the determination family
 
 1. ~~`OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.~~ **✅ done (Step 10).**
 2. ~~`PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk.~~ **✅ done (Step 11).**
-3. `GlucoseStored` (+ `DeletedGlucoseStored` 9b, if still deferred) — highest read volume; uses
-   `ValueObservation` for the live charts.
+3. `GlucoseStored` (+ `DeletedGlucoseStored` 9b) — highest read volume; uses `ValueObservation` for the
+   live charts. **Planned: see Step 12 above.** (The last entity; the CD cleanup step follows.)
 
 ## Cleanup (after all entities migrated & proven)
 
@@ -838,10 +990,13 @@ Core Data `contextProvider` for `PumpHistoryStorage`.
   the Core Data `NSFetchedResultsController` for live UI (TDD header). The pattern
   (`TDDStore.observeMostRecent()` → Combine → `@MainActor` sink) is the template for the
   glucose/determination charts in later steps.
-- **Cross-process.** Widgets / Live Activities read the store. `DatabasePool` over an
-  App-Group file with WAL supports this, but observation across processes needs explicit
-  handling (`DatabaseRegionObservation` + Darwin notifications). Verify before moving any
-  entity an extension reads.
+- **Cross-process.** ✅ Investigated for the glucose step (Step 12) and found **not to apply**: Core
+  Data lives in the app's private Documents directory (not the App Group), and widgets / Live Activities
+  / Watch / Garmin receive data via a push model (ActivityKit / WatchConnectivity / ConnectIQ) fed by
+  in-app managers — no extension reads the store directly. So in-app `ValueObservation` is sufficient for
+  every entity migrated so far. `DatabasePool` over the App-Group file with WAL still supports true
+  cross-process reads should an extension ever need them (then `DatabaseRegionObservation` + Darwin
+  notifications would be required).
 - **Bestandsdaten / rollback.** Each data migration must be proven on real installs of
   varying age before the Core Data entity is removed.
 
