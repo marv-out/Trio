@@ -20,7 +20,14 @@ extension Home.StateModel {
                     Task { @MainActor in
                         guard let self else { return }
                         let cutoff = Date.oneDayAgo
-                        self.updateInsulinFromDetails(details.filter { ($0.timestamp ?? .distantPast) >= cutoff })
+                        // Sort ascending to match the former `insulinController` FRC (ascending: true).
+                        // The BasalChart relies on this order to find each segment's *immediately next*
+                        // temp basal / paired resume via `first(where:)`; a descending list would pick
+                        // the newest instead, producing crossing basal lines.
+                        let filtered = details
+                            .filter { ($0.timestamp ?? .distantPast) >= cutoff }
+                            .sorted { ($0.timestamp ?? .distantPast) < ($1.timestamp ?? .distantPast) }
+                        self.updateInsulinFromDetails(filtered)
                         self.displayPumpStatusHighlightMessage()
                         self.displayPumpStatusBadge()
                     }

@@ -97,6 +97,13 @@ struct MainChartView: View {
                                 scroller.scrollTo("MainChart", anchor: .trailing)
                                 state.updateStartEndMarkers()
                                 calculateTempBasalsInBackground()
+                                // Compute the dashed scheduled-basal profile on first appear too. It is
+                                // otherwise only recomputed via `.onChange(of: state.tempBasals)`, which
+                                // no longer fires reliably: the GRDB ValueObservation emits its initial
+                                // snapshot once (often before onChange is registered), whereas the old
+                                // Core Data FRC re-fired after its merge. Without this the profile line
+                                // could be missing until the next pump write.
+                                calculateBasals()
                                 mainChartHasInitialized = true
                             }
                         }
