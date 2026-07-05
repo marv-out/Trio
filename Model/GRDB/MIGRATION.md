@@ -914,6 +914,20 @@ later backfill.
   `TreatmentsStateModel.glucoseController` likewise. The chart views (`GlucoseChartView`,
   `SelectionPopoverView`, `CurrentGlucoseView`, `CarbView`, `InsulinView`, `MainChartHelper.timeToNearestGlucose`)
   move to `[GlucoseRecord]` (reads `glucose`/`date`/`isManual`/`smoothedGlucose`/`directionEnum`).
+  - ⚠️ **Chart reactivity — two traps learned the hard way in Step 11 (apply them here):**
+    1. **Preserve the FRC's sort direction.** The old `glucoseController` sorted **ascending by date**;
+       `observeForChart()` should hand the subscriber an **ascending** array (sort in the sink after the
+       `date >= oneDayAgo` filter). `latestTwoGlucoseValues = Array(objects.suffix(2))`,
+       `timeToNearestGlucose`'s binary search, and the delta/"minutes ago" logic all assume ascending
+       order — a descending list silently corrupts them. (Treatments/History want *descending* like their
+       former `@FetchRequest` — sort per consumer, don't assume one order fits all.)
+    2. **Run `onChange`-gated computations once on first appear.** Anything the chart currently recomputes
+       via `.onChange(of: state.glucose…)` (e.g. Y-axis scaling in `updateGlucoseChartYAxis`, marker/scroll
+       updates in `MainChartView`) must **also** be kicked off in `onAppear` — a GRDB `ValueObservation`
+       emits its initial snapshot once, often *before* the view's `onChange` is registered, whereas the
+       Core Data FRC re-fired after its merge. Without the initial call the axis/markers can render stale
+       or empty until the next glucose write (this is exactly the missing dashed-basal-line bug from
+       Step 11's follow-up fix).
 - **Reactivity — the fan-out (the central risk).** The **five** `coreDataPublisher.filteredByEntityName("GlucoseStored")`
   sinks — `LiveActivityManager`, `AppleWatchManager`, `GarminManager` (500 ms debounce),
   `CalendarManager`, `UserNotificationsManager` — plus the `ContactImageManager` fetch-on-trigger, all
