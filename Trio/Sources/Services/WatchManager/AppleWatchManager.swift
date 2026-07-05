@@ -124,12 +124,15 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             }
         }.store(in: &subscriptions)
 
-        coreDataPublisher?.filteredByEntityName("PumpEventStored").sink { [weak self] _ in
-            guard let self = self else { return }
-            Task {
-                await self.getActiveBolusAmount()
-            }
-        }.store(in: &subscriptions)
+        // Pump events moved to GRDB; observe the latest non-external bolus instead of the Core Data
+        // save notification.
+        PumpEventStore.observeLastBolus()
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                guard let self = self else { return }
+                Task {
+                    await self.getActiveBolusAmount()
+                }
+            }).store(in: &subscriptions)
 
         // Overrides moved to GRDB; observe the store instead of the Core Data save notification.
         OverrideStore.observeLatest()
@@ -406,38 +409,12 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         }
     }
 
-    /// Fetches last pump event that is a non-external bolus from CoreData
-    /// - Returns: NSManagedObjectIDs for last bolus
-    func fetchLastBolus() async throws -> NSManagedObjectID? {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchLastBolus"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: context,
-            predicate: NSPredicate.lastPumpBolus,
-            key: "timestamp",
-            ascending: false,
-            fetchLimit: 1,
-            relationshipKeyPathsForPrefetching: ["bolus"]
-        )
-
-        return try await context.perform {
-            guard let fetchedResults = results as? [PumpEventStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return fetchedResults.map(\.objectID).first
-        }
-    }
-
-    /// Gets the active bolus amount by fetching last (active) bolus.
+    /// Gets the active bolus amount by fetching the last (active) non-external bolus from GRDB. The
+    /// store applies the 20-minute + non-external filter (formerly `NSPredicate.lastPumpBolus`).
     @MainActor func getActiveBolusAmount() async {
         do {
-            if let lastBolusObjectId = try await fetchLastBolus() {
-                let lastBolusObject: [PumpEventStored] = try await CoreDataStack.shared
-                    .getNSManagedObject(with: [lastBolusObjectId], context: viewContext)
-
-                activeBolusAmount = lastBolusObject.first?.bolus?.amount?.doubleValue ?? 0.0
+            if let details = try await PumpEventStore.fetchLastBolus() {
+                activeBolusAmount = details.bolus?.amount.map { NSDecimalNumber(decimal: $0).doubleValue } ?? 0.0
             }
         } catch {
             debug(

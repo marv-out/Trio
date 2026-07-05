@@ -91,21 +91,9 @@ final class BaseTidepoolManager: TidepoolManager, Injectable {
     // (see registerUploadControllers) instead of an FRC.
     private var carbsUploadObservationCancellable: AnyCancellable?
 
-    let insulinUploadControllerDelegate = FetchedResultsControllerDelegate()
-    private lazy var insulinUploadController: NSFetchedResultsController<PumpEventStored> = {
-        let request = NSFetchRequest<PumpEventStored>(entityName: "PumpEventStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: true)]
-        request.predicate = NSPredicate.pumpEventsNotYetUploadedToTidepool
-        request.fetchBatchSize = 50
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = insulinUploadControllerDelegate
-        return controller
-    }()
+    // Pump events live in GRDB; the not-yet-uploaded-to-Tidepool trigger is a ValueObservation instead
+    // of an NSFetchedResultsController.
+    private var insulinUploadObservationCancellable: AnyCancellable?
 
     @PersistedProperty(key: "TidepoolState") var rawTidepoolManager: Service.RawValue?
 
@@ -127,15 +115,17 @@ final class BaseTidepoolManager: TidepoolManager, Injectable {
             .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
                 Task { await self?.uploadCarbs() }
             })
-        insulinUploadControllerDelegate.onContentChange = { [weak self] in
-            Task { await self?.uploadInsulin() }
-        }
+        // Pump events live in GRDB: a ValueObservation fires when the not-yet-uploaded-to-Tidepool set
+        // changes, replacing the former NSFetchedResultsController.
+        insulinUploadObservationCancellable = PumpEventStore.observeNotYetUploadedCount(channel: .tidepool)
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                Task { await self?.uploadInsulin() }
+            })
 
         // performFetch must run on the viewContext's queue (main).
         Task { @MainActor in
             do {
                 try self.glucoseUploadController.performFetch()
-                try self.insulinUploadController.performFetch()
             } catch {
                 debug(.service, "\(DebuggingIdentifiers.failed) Failed to set up Tidepool upload controllers: \(error)")
             }
@@ -321,114 +311,95 @@ extension BaseTidepoolManager {
         guard !events.isEmpty, let tidepoolService = self.tidepoolService else { return }
 
         do {
-            let context = CoreDataStack.shared.newTaskContext()
-            context.name = "uploadDose"
-            // Fetch all temp basal entries from Core Data for the last 24 hours
-            let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-                ofType: PumpEventStored.self,
-                onContext: context,
-                predicate: NSCompoundPredicate(andPredicateWithSubpredicates: [
-                    NSPredicate.pumpHistoryLast24h,
-                    NSPredicate(format: "tempBasal != nil")
-                ]),
-                key: "timestamp",
-                ascending: true,
-                batchSize: 50
-            )
+            // Fetch all temp basal entries from GRDB for the last 24 hours (predecessor duration math)
+            let existingTempBasalEntries = try await PumpEventStore.fetchTempBasals(within: 24, ascending: true)
 
-            // Ensure that the processing happens within the background context for thread safety
-            try await context.perform {
-                guard let existingTempBasalEntries = results as? [PumpEventStored] else {
-                    throw CoreDataError.fetchError(function: #function, file: #file)
-                }
-
-                let insulinDoseEvents: [DoseEntry] = events.reduce([]) { result, event in
-                    var result = result
-                    switch event.type {
-                    case .tempBasal:
-                        result
-                            .append(
-                                contentsOf: self
-                                    .processTempBasalEvent(event, existingTempBasalEntries: existingTempBasalEntries)
-                            )
-                    case .bolus:
-                        guard let amount = event.amount else { return result }
-                        let bolusDoseEntry = DoseEntry(
-                            type: .bolus,
-                            startDate: event.timestamp,
-                            endDate: event.timestamp,
-                            value: Double(amount),
-                            unit: .units,
-                            deliveredUnits: nil,
-                            syncIdentifier: event.id,
-                            scheduledBasalRate: nil,
-                            insulinType: self.apsManager.pumpManager?.status.insulinType ?? nil,
-                            automatic: event.isSMB ?? true,
-                            manuallyEntered: event.isExternal ?? false
+            let insulinDoseEvents: [DoseEntry] = events.reduce([]) { result, event in
+                var result = result
+                switch event.type {
+                case .tempBasal:
+                    result
+                        .append(
+                            contentsOf: self
+                                .processTempBasalEvent(event, existingTempBasalEntries: existingTempBasalEntries)
                         )
-                        result.append(bolusDoseEntry)
+                case .bolus:
+                    guard let amount = event.amount else { return result }
+                    let bolusDoseEntry = DoseEntry(
+                        type: .bolus,
+                        startDate: event.timestamp,
+                        endDate: event.timestamp,
+                        value: Double(amount),
+                        unit: .units,
+                        deliveredUnits: nil,
+                        syncIdentifier: event.id,
+                        scheduledBasalRate: nil,
+                        insulinType: self.apsManager.pumpManager?.status.insulinType ?? nil,
+                        automatic: event.isSMB ?? true,
+                        manuallyEntered: event.isExternal ?? false
+                    )
+                    result.append(bolusDoseEntry)
+                default:
+                    break
+                }
+                return result
+            }
+
+            debug(.service, "TIDEPOOL DOSE ENTRIES: \(insulinDoseEvents)")
+
+            let pumpEvents: [PersistedPumpEvent] = events.compactMap { event -> PersistedPumpEvent? in
+                if let pumpEventType = event.type.mapEventTypeToPumpEventType() {
+                    let dose: DoseEntry? = switch pumpEventType {
+                    case .suspend:
+                        DoseEntry(suspendDate: event.timestamp, automatic: true)
+                    case .resume:
+                        DoseEntry(resumeDate: event.timestamp, automatic: true)
                     default:
-                        break
+                        nil
                     }
-                    return result
+
+                    return PersistedPumpEvent(
+                        date: event.timestamp,
+                        persistedDate: event.timestamp,
+                        dose: dose,
+                        isUploaded: true,
+                        objectIDURL: URL(string: "x-coredata:///PumpEvent/\(event.id)")!,
+                        raw: event.id.data(using: .utf8),
+                        title: event.note,
+                        type: pumpEventType
+                    )
+                } else {
+                    return nil
                 }
+            }
 
-                debug(.service, "TIDEPOOL DOSE ENTRIES: \(insulinDoseEvents)")
-
-                let pumpEvents: [PersistedPumpEvent] = events.compactMap { event -> PersistedPumpEvent? in
-                    if let pumpEventType = event.type.mapEventTypeToPumpEventType() {
-                        let dose: DoseEntry? = switch pumpEventType {
-                        case .suspend:
-                            DoseEntry(suspendDate: event.timestamp, automatic: true)
-                        case .resume:
-                            DoseEntry(resumeDate: event.timestamp, automatic: true)
-                        default:
-                            nil
-                        }
-
-                        return PersistedPumpEvent(
-                            date: event.timestamp,
-                            persistedDate: event.timestamp,
-                            dose: dose,
-                            isUploaded: true,
-                            objectIDURL: URL(string: "x-coredata:///PumpEvent/\(event.id)")!,
-                            raw: event.id.data(using: .utf8),
-                            title: event.note,
-                            type: pumpEventType
-                        )
-                    } else {
-                        return nil
-                    }
-                }
-
-                self.processQueue.async {
-                    tidepoolService.uploadDoseData(created: insulinDoseEvents, deleted: []) { result in
-                        switch result {
-                        case let .failure(error):
-                            debug(.nightscout, "Error synchronizing dose data with Tidepool: \(String(describing: error))")
-                        case .success:
-                            debug(.nightscout, "Success synchronizing dose data. Upload to Tidepool complete.")
-                            Task {
-                                let insulinEvents = events.filter {
-                                    $0.type == .tempBasal || $0.type == .tempBasalDuration || $0.type == .bolus
-                                }
-                                await self.updateInsulinAsUploaded(insulinEvents)
+            processQueue.async {
+                tidepoolService.uploadDoseData(created: insulinDoseEvents, deleted: []) { result in
+                    switch result {
+                    case let .failure(error):
+                        debug(.nightscout, "Error synchronizing dose data with Tidepool: \(String(describing: error))")
+                    case .success:
+                        debug(.nightscout, "Success synchronizing dose data. Upload to Tidepool complete.")
+                        Task {
+                            let insulinEvents = events.filter {
+                                $0.type == .tempBasal || $0.type == .tempBasalDuration || $0.type == .bolus
                             }
+                            await self.updateInsulinAsUploaded(insulinEvents)
                         }
                     }
+                }
 
-                    tidepoolService.uploadPumpEventData(pumpEvents) { result in
-                        switch result {
-                        case let .failure(error):
-                            debug(.nightscout, "Error synchronizing pump events data: \(String(describing: error))")
-                        case .success:
-                            debug(.nightscout, "Success synchronizing pump events data. Upload to Tidepool complete.")
-                            Task {
-                                let pumpEventType = events.map { $0.type.mapEventTypeToPumpEventType() }
-                                let pumpEvents = events.filter { _ in pumpEventType.contains(pumpEventType) }
+                tidepoolService.uploadPumpEventData(pumpEvents) { result in
+                    switch result {
+                    case let .failure(error):
+                        debug(.nightscout, "Error synchronizing pump events data: \(String(describing: error))")
+                    case .success:
+                        debug(.nightscout, "Success synchronizing pump events data. Upload to Tidepool complete.")
+                        Task {
+                            let pumpEventType = events.map { $0.type.mapEventTypeToPumpEventType() }
+                            let pumpEvents = events.filter { _ in pumpEventType.contains(pumpEventType) }
 
-                                await self.updateInsulinAsUploaded(pumpEvents)
-                            }
+                            await self.updateInsulinAsUploaded(pumpEvents)
                         }
                     }
                 }
@@ -439,26 +410,13 @@ extension BaseTidepoolManager {
     }
 
     private func updateInsulinAsUploaded(_ insulin: [PumpHistoryEvent]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateInsulinAsUploaded"
-        await context.perform {
-            let ids = insulin.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<PumpEventStored> = PumpEventStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToTidepool = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToTidepool: \(error.userInfo)"
-                )
-            }
+        let ids = insulin.map(\.id)
+        do {
+            try await PumpEventStore.markUploaded(channel: .tidepool, ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToTidepool: \(error)"
+            )
         }
     }
 
@@ -491,11 +449,10 @@ extension BaseTidepoolManager {
 extension BaseTidepoolManager {
     private func processTempBasalEvent(
         _ event: PumpHistoryEvent,
-        existingTempBasalEntries: [PumpEventStored]
+        existingTempBasalEntries: [PumpEventDetails]
     ) -> [DoseEntry] {
         var insulinDoseEvents: [DoseEntry] = []
 
-        // Caller (uploadDose) already executes within context.perform, so we run directly here
         guard let duration = event.duration, let amount = event.amount,
               let currentBasalRate = getCurrentBasalRate()
         else {
@@ -510,7 +467,7 @@ extension BaseTidepoolManager {
             if predecessorIndex >= 0 {
                 let predecessorEntry = existingTempBasalEntries[predecessorIndex]
                 if let predecessorTimestamp = predecessorEntry.timestamp,
-                   let predecessorEntrySyncIdentifier = predecessorEntry.id
+                   let predecessorEntrySyncIdentifier = predecessorEntry.event.id
                 {
                     let predecessorEndDate = predecessorTimestamp
                         .addingTimeInterval(TimeInterval(
@@ -523,7 +480,7 @@ extension BaseTidepoolManager {
                         let adjustedEndDate = event.timestamp
                         let adjustedDuration = adjustedEndDate.timeIntervalSince(predecessorTimestamp)
                         let adjustedDeliveredUnits = (adjustedDuration / 3600) *
-                            Double(truncating: predecessorEntry.tempBasal?.rate ?? 0)
+                            Double(truncating: (predecessorEntry.tempBasal?.rate ?? 0) as NSDecimalNumber)
 
                         // Create updated predecessor dose entry
                         let updatedPredecessorEntry = DoseEntry(

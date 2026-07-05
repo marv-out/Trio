@@ -64,10 +64,7 @@ final class BaseBolusSafetyValidator: BolusSafetyValidator, Injectable {
     @Injected() private var settingsManager: SettingsManager!
     @Injected() private var iobService: IOBService!
 
-    private let fetchContext: NSManagedObjectContext
-
     init(resolver: Resolver) {
-        fetchContext = CoreDataStack.shared.newTaskContext()
         injectServices(resolver)
     }
 
@@ -84,23 +81,6 @@ final class BaseBolusSafetyValidator: BolusSafetyValidator, Injectable {
     }
 
     func fetchTotalRecentBolusAmount(since date: Date) async throws -> Decimal {
-        let predicate = NSPredicate(
-            format: "type == %@ AND timestamp > %@",
-            PumpEventStored.EventType.bolus.rawValue,
-            date as NSDate
-        )
-        let results: Any = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: fetchContext,
-            predicate: predicate,
-            key: "timestamp",
-            ascending: true,
-            fetchLimit: nil,
-            propertiesToFetch: ["bolus.amount"]
-        )
-        guard let bolusDictionaries = results as? [[String: Any]] else {
-            throw CoreDataError.fetchError(function: #function, file: #file)
-        }
-        return bolusDictionaries.compactMap { ($0["bolus.amount"] as? NSNumber)?.decimalValue }.reduce(0, +)
+        try await PumpEventStore.fetchTotalRecentBolusAmount(since: date)
     }
 }

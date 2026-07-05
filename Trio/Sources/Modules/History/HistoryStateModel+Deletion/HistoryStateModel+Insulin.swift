@@ -1,20 +1,20 @@
-import CoreData
 import Foundation
 
 extension History.StateModel {
     // Insulin deletion from history
-    /// - **Parameter**: NSManagedObjectID to be able to transfer the object safely from one thread to another thread
-    func invokeInsulinDeletionTask(_ treatmentObjectID: NSManagedObjectID) {
+    /// - **Parameter**: the GRDB `pk` of the pump event to delete (value-type identity, no
+    /// `NSManagedObjectID` round-trip).
+    func invokeInsulinDeletionTask(_ pk: Int64) {
         Task {
             do {
-                try await invokeInsulinDeletion(treatmentObjectID)
+                try await invokeInsulinDeletion(pk)
             } catch {
                 debug(.default, "\(DebuggingIdentifiers.failed) Failed to delete insulin entry: \(error)")
             }
         }
     }
 
-    func invokeInsulinDeletion(_ treatmentObjectID: NSManagedObjectID) async throws {
+    func invokeInsulinDeletion(_ pk: Int64) async throws {
         do {
             let authenticated = try await unlockmanager.unlock()
 
@@ -34,10 +34,10 @@ extension History.StateModel {
             }
 
             // Delete from remote service(s) (i.e. Nightscout, Apple Health, Tidepool)
-            await deleteInsulinFromServices(with: treatmentObjectID)
+            await deleteInsulinFromServices(with: pk)
 
-            // Delete from Core Data
-            await CoreDataStack.shared.deleteObject(identifiedBy: treatmentObjectID)
+            // Delete from GRDB (cascades to the bolus / temp-basal child)
+            try await PumpEventStore.delete(pk: pk)
 
             // Perform a determine basal sync to update iob
             try await apsManager.determineBasalSync()
@@ -52,34 +52,22 @@ extension History.StateModel {
         }
     }
 
-    func deleteInsulinFromServices(with treatmentObjectID: NSManagedObjectID) async {
-        let taskContext = CoreDataStack.shared.newTaskContext()
-        taskContext.name = "deleteContext"
-        taskContext.transactionAuthor = "deleteInsulinFromServices"
-
-        await taskContext.perform {
-            do {
-                guard let treatmentToDelete = try taskContext.existingObject(with: treatmentObjectID) as? PumpEventStored
-                else {
-                    debug(.default, "Could not cast the object to PumpEventStored")
-                    return
-                }
-
-                if let id = treatmentToDelete.id, let timestamp = treatmentToDelete.timestamp,
-                   let bolus = treatmentToDelete.bolus, let bolusAmount = bolus.amount
-                {
-                    self.provider.deleteInsulinFromNightscout(withID: id)
-                    self.provider.deleteInsulinFromHealth(withSyncID: id)
-                    self.provider.deleteInsulinFromTidepool(withSyncId: id, amount: bolusAmount as Decimal, at: timestamp)
-                }
-
-                taskContext.delete(treatmentToDelete)
-                try taskContext.save()
-
-                debug(.default, "Successfully deleted the treatment object.")
-            } catch {
-                debug(.default, "Failed to delete the treatment object: \(error)")
+    func deleteInsulinFromServices(with pk: Int64) async {
+        do {
+            guard let details = try await PumpEventStore.fetch(pk: pk) else {
+                debug(.default, "Could not find the pump event to delete")
+                return
             }
+
+            if let id = details.event.id, let timestamp = details.timestamp,
+               let bolus = details.bolus, let bolusAmount = bolus.amount
+            {
+                provider.deleteInsulinFromNightscout(withID: id)
+                provider.deleteInsulinFromHealth(withSyncID: id)
+                provider.deleteInsulinFromTidepool(withSyncId: id, amount: bolusAmount, at: timestamp)
+            }
+        } catch {
+            debug(.default, "Failed to resolve the treatment object for deletion: \(error)")
         }
     }
 }

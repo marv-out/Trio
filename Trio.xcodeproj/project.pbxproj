@@ -432,6 +432,8 @@
 		BD00F0532FF3C426005D482C /* CarbEntryRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0512FF3C426005D482C /* CarbEntryRecord.swift */; };
 		BD00F0562FF6F937005D482C /* OrefDeterminationMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0542FF6F937005D482C /* OrefDeterminationMigration.swift */; };
 		BD00F0572FF6F937005D482C /* OrefDeterminationRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0552FF6F937005D482C /* OrefDeterminationRecord.swift */; };
+		BD00F05A2FFA8149005D482C /* PumpEventRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0592FFA8149005D482C /* PumpEventRecord.swift */; };
+		BD00F05B2FFA8149005D482C /* PumpEventMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F0582FFA8149005D482C /* PumpEventMigration.swift */; };
 		BD00F8A12FF1B100005D482C /* TempTargetRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */; };
 		BD00F8A32FF1B100005D482C /* TempTargetMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */; };
 		BD04ECCE2D29952A008C5FEB /* BolusProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */; };
@@ -1394,6 +1396,8 @@
 		BD00F0512FF3C426005D482C /* CarbEntryRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarbEntryRecord.swift; sourceTree = "<group>"; };
 		BD00F0542FF6F937005D482C /* OrefDeterminationMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefDeterminationMigration.swift; sourceTree = "<group>"; };
 		BD00F0552FF6F937005D482C /* OrefDeterminationRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefDeterminationRecord.swift; sourceTree = "<group>"; };
+		BD00F0582FFA8149005D482C /* PumpEventMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpEventMigration.swift; sourceTree = "<group>"; };
+		BD00F0592FFA8149005D482C /* PumpEventRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpEventRecord.swift; sourceTree = "<group>"; };
 		BD00F8A02FF1B100005D482C /* TempTargetRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetRecord.swift; sourceTree = "<group>"; };
 		BD00F8A22FF1B100005D482C /* TempTargetMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTargetMigration.swift; sourceTree = "<group>"; };
 		BD04ECCD2D299522008C5FEB /* BolusProgressOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressOverlay.swift; sourceTree = "<group>"; };
@@ -3282,6 +3286,8 @@
 		BD00F0010000A000005D482C /* GRDB */ = {
 			isa = PBXGroup;
 			children = (
+				BD00F0582FFA8149005D482C /* PumpEventMigration.swift */,
+				BD00F0592FFA8149005D482C /* PumpEventRecord.swift */,
 				BD00F0542FF6F937005D482C /* OrefDeterminationMigration.swift */,
 				BD00F0552FF6F937005D482C /* OrefDeterminationRecord.swift */,
 				BD00F0502FF3C426005D482C /* CarbEntryMigration.swift */,
@@ -5163,6 +5169,8 @@
 				3B139EF32DF06CE100D40797 /* AutosensGenerator.swift in Sources */,
 				DDC38E102D9B377800ADCB46 /* OnboardingView+Util.swift in Sources */,
 				BDC2EA472C3045AD00E5BBD0 /* Override.swift in Sources */,
+				BD00F05A2FFA8149005D482C /* PumpEventRecord.swift in Sources */,
+				BD00F05B2FFA8149005D482C /* PumpEventMigration.swift in Sources */,
 				DD30B9C72E06257900DA677C /* DetermineBasalGenerator.swift in Sources */,
 				3B1C5C332D68E233004E9273 /* PumpHistory+copy.swift in Sources */,
 				3B1C5C342D68E233004E9273 /* TimeExtensions.swift in Sources */,

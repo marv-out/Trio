@@ -443,21 +443,9 @@ extension Notification.Name {
         async let glucoseDeletion: () = coreDataStack.batchDeleteOlderThan(GlucoseStored.self, dateKey: "date", days: 90)
         async let archivedGlucoseDeletion: () = coreDataStack
             .batchDeleteOlderThan(DeletedGlucoseStored.self, dateKey: "date", days: 90)
-        async let pumpEventDeletion: () = coreDataStack.batchDeleteOlderThan(PumpEventStored.self, dateKey: "timestamp", days: 90)
-        async let bolusDeletion: () = coreDataStack.batchDeleteOlderThan(
-            parentType: PumpEventStored.self,
-            childType: BolusStored.self,
-            dateKey: "timestamp",
-            days: 90,
-            relationshipKey: "pumpEvent"
-        )
-        async let tempBasalDeletion: () = coreDataStack.batchDeleteOlderThan(
-            parentType: PumpEventStored.self,
-            childType: TempBasalStored.self,
-            dateKey: "timestamp",
-            days: 90,
-            relationshipKey: "pumpEvent"
-        )
+        // Pump events now live in GRDB; the 90-day prune cascades to their bolus / temp-basal children
+        // via the `ON DELETE CASCADE` foreign keys (the old parent/child batch deletes are gone).
+        async let pumpEventDeletion: () = PumpEventStore.deleteOlderThan(days: 90)
         // Determinations now live in GRDB; the 90-day prune cascades to their forecasts and
         // (transitively) their forecast values via the `ON DELETE CASCADE` foreign keys.
         async let determinationDeletion: () = OrefDeterminationStore.deleteOlderThan(days: 90)
@@ -479,8 +467,6 @@ extension Notification.Name {
         try await glucoseDeletion
         try await archivedGlucoseDeletion
         try await pumpEventDeletion
-        try await bolusDeletion
-        try await tempBasalDeletion
         try await determinationDeletion
         try await batteryDeletion
         try await carbEntryDeletion

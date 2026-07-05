@@ -83,20 +83,12 @@ class BundleReference {}
         let url = URL(filePath: path)
 
         let now = Date("2025-04-29T01:33:58.000Z")!
-        try await importer.importPumpHistory(url: url, now: now)
+        try await importer.importPumpHistory(url: url, now: now, in: grdb.pool)
         // test out deduplication logic
-        try await importer.importPumpHistory(url: url, now: now)
+        try await importer.importPumpHistory(url: url, now: now, in: grdb.pool)
 
-        let allReadings = try await coreDataStack.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "timestamp",
-            ascending: false
-        ) as? [PumpEventStored] ?? []
-
-        let objectIds = allReadings.map(\.objectID)
-        let parsedHistory = OpenAPS.loadAndMapPumpEvents(objectIds, orphanedResumes: [], from: context)
+        let details = try await PumpEventStore.fetchForStats(from: .distantPast, pool: grdb.pool)
+        let parsedHistory = OpenAPS.loadAndMapPumpEvents(details, orphanedResumes: [])
 
         var bolusTotal = 0.0
         var bolusCount = 0
@@ -146,17 +138,11 @@ class BundleReference {}
         let url = URL(filePath: path)
 
         let now = Date("2025-04-30T01:33:58.000Z")!
-        try await importer.importPumpHistory(url: url, now: now)
+        try await importer.importPumpHistory(url: url, now: now, in: grdb.pool)
 
-        let allReadings = try await coreDataStack.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "timestamp",
-            ascending: false
-        ) as? [PumpEventStored] ?? []
+        let details = try await PumpEventStore.fetchForStats(from: .distantPast, pool: grdb.pool)
 
-        #expect(allReadings.isEmpty)
+        #expect(details.isEmpty)
     }
 
     @Test("Import pump history with external insulin") func testImportPumpHistoryWithExternalInsulin() async throws {
@@ -165,18 +151,10 @@ class BundleReference {}
         let url = URL(filePath: path)
 
         let now = Date("2025-05-04T04:37:44.654Z")!
-        try await importer.importPumpHistory(url: url, now: now)
+        try await importer.importPumpHistory(url: url, now: now, in: grdb.pool)
 
-        let allReadings = try await coreDataStack.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: context,
-            predicate: NSPredicate(format: "TRUEPREDICATE"),
-            key: "timestamp",
-            ascending: false
-        ) as? [PumpEventStored] ?? []
-
-        let objectIds = allReadings.map(\.objectID)
-        let parsedHistory = OpenAPS.loadAndMapPumpEvents(objectIds, orphanedResumes: [], from: context)
+        let details = try await PumpEventStore.fetchForStats(from: .distantPast, pool: grdb.pool)
+        let parsedHistory = OpenAPS.loadAndMapPumpEvents(details, orphanedResumes: [])
 
         #expect(parsedHistory.count == 1)
 

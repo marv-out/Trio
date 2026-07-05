@@ -192,7 +192,7 @@ extension Home {
                         comment: "Manual Temp basal"
                     )
                 }
-                rate = tempRate
+                rate = tempRate as NSDecimalNumber
             }
 
             let rateString = Formatter.decimalFormatterWithThreeFractionDigits.string(from: rate) ?? "0"
@@ -779,11 +779,11 @@ extension Home {
             /// - TRUE:  show the pump bolus
             /// - FALSE:  do not show a progress bar at all
             if let bolusTotal = state.lastPumpBolus?.bolus?.amount {
-                let bolusFraction = progress * (bolusTotal as Decimal)
+                let bolusFraction = progress * bolusTotal
                 let bolusString =
                     (bolusProgressFormatter.string(from: bolusFraction as NSNumber) ?? "0")
                         + String(localized: " of ", comment: "Bolus string partial message: 'x U of y U' in home view") +
-                        (Formatter.decimalFormatterWithThreeFractionDigits.string(from: bolusTotal as NSNumber) ?? "0")
+                        (Formatter.decimalFormatterWithThreeFractionDigits.string(from: bolusTotal as NSDecimalNumber) ?? "0")
                         + String(localized: " U", comment: "Insulin unit")
 
                 ZStack {

@@ -203,35 +203,21 @@ class JSONImporter {
     ///   - JSONImporterError.tempBasalAndDurationMismatch if we can't match tempBasals with their duration.
     ///   - An error if the file cannot be read or decoded.
     ///   - An error if the CoreData operation fails.
-    func importPumpHistory(url: URL, now: Date) async throws {
+    /// `pool == nil` uses the shared GRDB store; tests pass an in-memory pool.
+    func importPumpHistory(url: URL, now: Date, in pool: DatabasePool? = nil) async throws {
         let twentyFourHoursAgo = now - 24.hours.timeInterval
         let pumpHistoryRaw: [PumpHistoryEvent] = try readJsonFile(url: url)
-        let existingTimestamps = try await fetchDates(
-            ofType: PumpEventStored.self,
-            predicate: .predicateForTimestampBetween(start: twentyFourHoursAgo, end: now),
-            sortKey: "timestamp",
-            dateKeyPath: \.timestamp
-        )
+        // Pump events live in GRDB; dedupe against the timestamps already stored in the import window.
+        let existingTimestamps = try await PumpEventStore.existingTimestamps(from: twentyFourHoursAgo, to: now, pool: pool)
         let pumpHistoryFiltered = pumpHistoryRaw
             .filter { $0.timestamp >= twentyFourHoursAgo && $0.timestamp <= now && !existingTimestamps.contains($0.timestamp) }
 
         let pumpHistory = try combineTempBasalAndDuration(pumpHistory: pumpHistoryFiltered)
         try checkForInconsistencies(pumpHistory: pumpHistory)
 
-        // Create a background context for batch processing
-        let backgroundContext = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
-        backgroundContext.parent = context
-
-        try await backgroundContext.perform {
-            for pumpEntry in pumpHistory {
-                try pumpEntry.store(in: backgroundContext)
-            }
-
-            try backgroundContext.save()
-        }
-
-        try await context.perform {
-            try self.context.save()
+        for pumpEntry in pumpHistory {
+            let (event, bolus, tempBasal) = try pumpEntry.makePumpEventRecords()
+            try await PumpEventStore.insert(event: event, bolus: bolus, tempBasal: tempBasal, pool: pool)
         }
     }
 
@@ -339,35 +325,42 @@ extension BloodGlucose {
 }
 
 extension PumpHistoryEvent {
-    /// Helper function to convert `PumpHistoryEvent` to `PumpEventStored` while importing JSON pump histories
-    func store(in context: NSManagedObjectContext) throws {
-        let pumpEntry = PumpEventStored(context: context)
-        pumpEntry.id = id
-        pumpEntry.timestamp = timestamp
-        pumpEntry.type = type.rawValue
-        pumpEntry.isUploadedToNS = true
-        pumpEntry.isUploadedToHealth = true
-        pumpEntry.isUploadedToTidepool = true
+    /// Helper function to convert `PumpHistoryEvent` to GRDB records while importing JSON pump histories.
+    /// Imported data is treated as already uploaded (all three upload flags true), matching the former
+    /// Core Data `store(in:)`.
+    func makePumpEventRecords() throws -> (event: PumpEventRecord, bolus: BolusRecord?, tempBasal: TempBasalRecord?) {
+        let event = PumpEventRecord(
+            id: id,
+            timestamp: timestamp,
+            type: type.rawValue,
+            isUploadedToNS: true,
+            isUploadedToHealth: true,
+            isUploadedToTidepool: true
+        )
 
         if type == .bolus {
             guard let amount = amount else {
                 throw JSONImporterError.missingRequiredPropertyInPumpEntry
             }
-            let bolusEntry = BolusStored(context: context)
-            bolusEntry.amount = NSDecimalNumber(decimal: amount)
-            bolusEntry.isSMB = isSMB ?? false
-            bolusEntry.isExternal = isExternal ?? isExternalInsulin ?? false
-            pumpEntry.bolus = bolusEntry
+            let bolus = BolusRecord(
+                amount: amount,
+                isSMB: isSMB ?? false,
+                isExternal: isExternal ?? isExternalInsulin ?? false
+            )
+            return (event, bolus, nil)
         } else if type == .tempBasal {
             guard let rate = rate, let duration = duration else {
                 throw JSONImporterError.missingRequiredPropertyInPumpEntry
             }
-            let tempEntry = TempBasalStored(context: context)
-            tempEntry.rate = NSDecimalNumber(decimal: rate)
-            tempEntry.duration = Int16(duration)
-            tempEntry.tempType = temp?.rawValue
-            pumpEntry.tempBasal = tempEntry
+            let tempBasal = TempBasalRecord(
+                duration: Int16(duration),
+                rate: rate,
+                tempType: temp?.rawValue
+            )
+            return (event, nil, tempBasal)
         }
+
+        return (event, nil, nil)
     }
 }
 

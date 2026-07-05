@@ -92,11 +92,11 @@ extension Home {
         var determinationsFromPersistence: [OrefDeterminationRecord] = []
         var enactedAndNonEnactedDeterminations: [OrefDeterminationRecord] = []
         var fetchedTDDs: [TDD] = []
-        var insulinFromPersistence: [PumpEventStored] = []
-        var tempBasals: [PumpEventStored] = []
-        var suspendAndResumeEvents: [PumpEventStored] = []
+        var insulinFromPersistence: [PumpEventDetails] = []
+        var tempBasals: [PumpEventDetails] = []
+        var suspendAndResumeEvents: [PumpEventDetails] = []
         var batteryFromPersistence: [BatteryRecord] = []
-        var lastPumpBolus: PumpEventStored?
+        var lastPumpBolus: PumpEventDetails?
         var overrides: [OverrideRecord] = []
         var overrideRunStored: [OverrideRunRecord] = []
         var tempTargetStored: [TempTargetRecord] = []
@@ -165,37 +165,11 @@ extension Home {
         @ObservationIgnored var enactedDeterminationObservationCancellable: AnyCancellable?
         @ObservationIgnored var determinationObservationCancellable: AnyCancellable?
 
-        @ObservationIgnored let insulinControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var insulinController: NSFetchedResultsController<PumpEventStored> = {
-            let request = NSFetchRequest<PumpEventStored>(entityName: "PumpEventStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: true)]
-            request.predicate = NSPredicate.pumpHistoryLast24h
-            request.fetchBatchSize = 30
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = insulinControllerDelegate
-            return controller
-        }()
-
-        @ObservationIgnored let lastBolusControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var lastBolusController: NSFetchedResultsController<PumpEventStored> = {
-            let request = NSFetchRequest<PumpEventStored>(entityName: "PumpEventStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: false)]
-            request.predicate = NSPredicate.lastPumpBolus
-            request.fetchLimit = 1
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = lastBolusControllerDelegate
-            return controller
-        }()
+        // Pump events (incl. boluses + temp basals) now live in GRDB; the insulin chart list and the
+        // last-bolus value are kept current via ValueObservation instead of Core Data
+        // NSFetchedResultsControllers. See PumpHistorySetup.
+        @ObservationIgnored var insulinObservationCancellable: AnyCancellable?
+        @ObservationIgnored var lastBolusObservationCancellable: AnyCancellable?
 
         // Overrides + their runs now live in GRDB; the lists are kept current via ValueObservation
         // instead of Core Data NSFetchedResultsControllers. See OverrideSetup.

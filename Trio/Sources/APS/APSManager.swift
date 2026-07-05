@@ -660,32 +660,21 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func fetchCurrentTempBasal(date: Date) async throws -> TempBasal {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchCurrentTempBasal"
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: context,
-            predicate: NSPredicate.recentPumpHistory,
-            key: "timestamp",
-            ascending: false,
-            fetchLimit: 1,
-            relationshipKeyPathsForPrefetching: ["tempBasal"]
-        )
+        let recent = try await PumpEventStore.fetchRecentTempBasal()
 
-        let fetchedTempBasal = await context.perform {
-            guard let fetchedResults = results as? [PumpEventStored],
-                  let tempBasalEvent = fetchedResults.first,
-                  let tempBasal = tempBasalEvent.tempBasal,
-                  let eventTimestamp = tempBasalEvent.timestamp
+        let fetchedTempBasal: TempBasal = {
+            guard let event = recent,
+                  let tempBasal = event.tempBasal,
+                  let eventTimestamp = event.timestamp
             else {
                 return TempBasal(duration: 0, rate: 0, temp: .absolute, timestamp: date)
             }
 
             let delta = Int((date.timeIntervalSince1970 - eventTimestamp.timeIntervalSince1970) / 60)
             let duration = max(0, Int(tempBasal.duration) - delta)
-            let rate = tempBasal.rate as? Decimal ?? 0
+            let rate = tempBasal.rate ?? 0
             return TempBasal(duration: duration, rate: rate, temp: .absolute, timestamp: date)
-        }
+        }()
 
         guard let state = pumpManager?.status.basalDeliveryState else { return fetchedTempBasal }
 

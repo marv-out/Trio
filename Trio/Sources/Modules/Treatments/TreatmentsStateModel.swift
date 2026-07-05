@@ -157,21 +157,9 @@ extension Treatments {
         // `determinationController` NSFetchedResultsController (latest within the last 30 minutes).
         @ObservationIgnored var determinationObservationCancellable: AnyCancellable?
 
-        @ObservationIgnored let lastBolusControllerDelegate = FetchedResultsControllerDelegate()
-        @ObservationIgnored private(set) lazy var lastBolusController: NSFetchedResultsController<PumpEventStored> = {
-            let request = NSFetchRequest<PumpEventStored>(entityName: "PumpEventStored")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: false)]
-            request.predicate = NSPredicate.lastPumpBolus
-            request.fetchLimit = 1
-            let controller = NSFetchedResultsController(
-                fetchRequest: request,
-                managedObjectContext: viewContext,
-                sectionNameKeyPath: nil,
-                cacheName: nil
-            )
-            controller.delegate = lastBolusControllerDelegate
-            return controller
-        }()
+        // Pump events now live in GRDB; the last-bolus value is observed via ValueObservation
+        // instead of a Core Data NSFetchedResultsController. See `setupLastBolusController`.
+        @ObservationIgnored var lastBolusObservationCancellable: AnyCancellable?
 
         private var subscriptions = Set<AnyCancellable>()
 
@@ -179,7 +167,7 @@ extension Treatments {
 
         var bolusProgress: Decimal?
         var isBolusInProgress: Bool { bolusProgress != nil }
-        var lastPumpBolus: PumpEventStored?
+        var lastPumpBolus: PumpEventDetails?
 
         func unsubscribe() {
             subscriptions.forEach { $0.cancel() }
@@ -975,25 +963,29 @@ private extension Predictions {
 // MARK: - Last Pump Bolus
 
 extension Treatments.StateModel {
-    /// Mirrors `HomeStateModel`'s last-bolus controller so the in-progress visualizer can show the
-    /// running pump-bolus's amount as the denominator (not the user's pending entry).
-    /// Filters out external boluses via `NSPredicate.lastPumpBolus`.
+    /// Mirrors `HomeStateModel`'s last-bolus observation so the in-progress visualizer can show the
+    /// running pump-bolus's amount as the denominator (not the user's pending entry). The store scans the
+    /// newest 100 events (a deterministic bound covering the 20-minute window) and filters out external
+    /// boluses; the `timestamp >= 20min` rule (from `NSPredicate.lastPumpBolus`) is applied here.
     @MainActor func setupLastBolusController() {
-        lastBolusControllerDelegate.onContentChange = { [weak self] in
-            Task { @MainActor in
-                self?.updateLastBolusFromController()
-            }
-        }
-
-        do {
-            try lastBolusController.performFetch()
-            updateLastBolusFromController()
-        } catch {
-            debug(.default, "\(DebuggingIdentifiers.failed) Failed to perform last bolus fetch: \(error)")
-        }
-    }
-
-    @MainActor private func updateLastBolusFromController() {
-        lastPumpBolus = lastBolusController.fetchedObjects?.first
+        lastBolusObservationCancellable = PumpEventStore.observeLastBolus()
+            .sink(
+                receiveCompletion: { completion in
+                    if case let .failure(error) = completion {
+                        debug(.default, "\(DebuggingIdentifiers.failed) Last bolus observation failed: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] details in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        let cutoff = Date.twentyMinutesAgo
+                        if let details, (details.timestamp ?? .distantPast) >= cutoff {
+                            self.lastPumpBolus = details
+                        } else {
+                            self.lastPumpBolus = nil
+                        }
+                    }
+                }
+            )
     }
 }

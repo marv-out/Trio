@@ -472,33 +472,10 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
         }
     }
 
-    /// Fetches the most recent temporary basal rate from CoreData pump history.
-    /// - Returns: An array containing the NSManagedObjectID of the latest temp basal event, if any.
-    private func fetchTempBasals() async throws -> [NSManagedObjectID] {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "fetchTempBasals"
-        let tempBasalPredicate = NSPredicate(format: "tempBasal != nil")
-        let compoundPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-            NSPredicate.pumpHistoryLast24h,
-            tempBasalPredicate
-        ])
-
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: context,
-            predicate: compoundPredicate,
-            key: "timestamp",
-            ascending: false,
-            fetchLimit: 1,
-            relationshipKeyPathsForPrefetching: ["tempBasal"]
-        )
-
-        return try await context.perform {
-            guard let pumpEvents = results as? [PumpEventStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-            return pumpEvents.map(\.objectID)
-        }
+    /// Fetches the most recent temporary basal rate from GRDB pump history (last 24h, newest first).
+    /// - Returns: An array containing the latest temp basal event detail, if any.
+    private func fetchTempBasals() async throws -> [PumpEventDetails] {
+        try await PumpEventStore.fetchTempBasals(within: 24, ascending: false, limit: 1)
     }
 
     /// Fetches all determinations from the last 30 minutes (no fetch limit).
@@ -533,7 +510,7 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
         // This ensures we get both enacted and suggested determinations (GRDB value types).
         let allDeterminationObjects = try await fetchDeterminations30Min()
 
-        let tempBasalIds = try await fetchTempBasals()
+        let tempBasalObjects = try await fetchTempBasals()
 
         // Extract all needed values from self before entering perform block (Sendable compliance)
         let unitsValue = units
@@ -554,7 +531,6 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
             // Fetch Core Data objects inside perform block (determinations are GRDB value types,
             // captured from above).
             let glucoseObjects = glucoseIds.compactMap { context.object(with: $0) as? GlucoseStored }
-            let tempBasalObjects = tempBasalIds.compactMap { context.object(with: $0) as? PumpEventStored }
             var watchStates: [GarminWatchState] = []
 
             let unitsHint = unitsValue == .mgdL ? "mgdl" : "mmol"
@@ -596,7 +572,7 @@ final class BaseGarminManager: NSObject, GarminManager, Injectable {
                let tempBasalData = firstTempBasal.tempBasal,
                let tempRate = tempBasalData.rate
             {
-                tbrValue = Double(truncating: tempRate)
+                tbrValue = Double(truncating: tempRate as NSDecimalNumber)
             } else {
                 // Fall back to scheduled basal from profile
                 if !basalProfile.isEmpty {

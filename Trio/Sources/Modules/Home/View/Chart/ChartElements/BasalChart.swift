@@ -157,7 +157,7 @@ extension MainChartView {
             let isInsulinSuspended = state.suspendAndResumeEvents
                 .contains { $0.timestamp ?? now >= timestamp && $0.timestamp ?? now <= end }
 
-            let rate = Double(truncating: temp.tempBasal?.rate ?? Decimal.zero as NSDecimalNumber) * (isInsulinSuspended ? 0 : 1)
+            let rate = Double(truncating: (temp.tempBasal?.rate ?? .zero) as NSDecimalNumber) * (isInsulinSuspended ? 0 : 1)
 
             // Check if there's a subsequent temp basal to determine the end time
             guard let nextTemp = state.tempBasals.first(where: { $0.timestamp ?? .distantPast > timestamp }) else {

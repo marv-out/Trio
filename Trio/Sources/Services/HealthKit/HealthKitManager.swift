@@ -87,21 +87,9 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
     // (see registerUploadControllers) instead of an FRC.
     private var carbsUploadObservationCancellable: AnyCancellable?
 
-    let insulinUploadControllerDelegate = FetchedResultsControllerDelegate()
-    private lazy var insulinUploadController: NSFetchedResultsController<PumpEventStored> = {
-        let request = NSFetchRequest<PumpEventStored>(entityName: "PumpEventStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: true)]
-        request.predicate = NSPredicate.pumpEventsNotYetUploadedToHealth
-        request.fetchBatchSize = 50
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = insulinUploadControllerDelegate
-        return controller
-    }()
+    // Pump events live in GRDB; the not-yet-uploaded-to-Health trigger is a ValueObservation instead
+    // of an NSFetchedResultsController.
+    private var insulinUploadObservationCancellable: AnyCancellable?
 
     var isAvailableOnCurrentDevice: Bool {
         HKHealthStore.isHealthDataAvailable()
@@ -128,15 +116,17 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
             .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
                 Task { await self?.uploadCarbs() }
             })
-        insulinUploadControllerDelegate.onContentChange = { [weak self] in
-            Task { await self?.uploadInsulin() }
-        }
+        // Pump events live in GRDB: a ValueObservation fires when the not-yet-uploaded-to-Health set
+        // changes, replacing the former NSFetchedResultsController.
+        insulinUploadObservationCancellable = PumpEventStore.observeNotYetUploadedCount(channel: .health)
+            .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] _ in
+                Task { await self?.uploadInsulin() }
+            })
 
         // performFetch must run on the viewContext's queue (main).
         Task { @MainActor in
             do {
                 try self.glucoseUploadController.performFetch()
-                try self.insulinUploadController.performFetch()
             } catch {
                 debug(.service, "\(DebuggingIdentifiers.failed) Failed to set up HealthKit upload controllers: \(error)")
             }
@@ -389,76 +379,59 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
               insulinEvents.isNotEmpty else { return }
 
         do {
-            let context = CoreDataStack.shared.newTaskContext()
-            context.name = "uploadInsulin"
-            let fetchedInsulinEntries = try await CoreDataStack.shared.fetchEntitiesAsync(
-                ofType: PumpEventStored.self,
-                onContext: context,
-                predicate: NSCompoundPredicate(andPredicateWithSubpredicates: [
-                    NSPredicate.pumpHistoryLast24h,
-                    NSPredicate(format: "tempBasal != nil")
-                ]),
-                key: "timestamp",
-                ascending: true,
-                batchSize: 50
-            )
+            // Temp-basal events (last 24h, ascending) used to compute the predecessor delivered units.
+            let existingTempBasalEntries = try await PumpEventStore.fetchTempBasals(within: 24, ascending: true)
 
             var insulinSamples: [HKQuantitySample] = []
 
-            try await context.perform {
-                guard let existingTempBasalEntries = fetchedInsulinEntries as? [PumpEventStored] else {
-                    throw CoreDataError.fetchError(function: #function, file: #file)
-                }
+            for event in insulinEvents {
+                switch event.type {
+                case .bolus:
+                    // For bolus events, create a HealthKit sample directly
+                    if let sample = createSample(for: event, sampleType: sampleType) {
+                        debug(.service, "Created HealthKit sample for bolus entry: \(sample)")
+                        insulinSamples.append(sample)
+                    }
+                case .tempBasal:
+                    // For temp basal events, process them and adjust overlapping durations if necessary
+                    guard let duration = event.duration, let amount = event.amount else { continue }
 
-                for event in insulinEvents {
-                    switch event.type {
-                    case .bolus:
-                        // For bolus events, create a HealthKit sample directly
-                        if let sample = self.createSample(for: event, sampleType: sampleType) {
-                            debug(.service, "Created HealthKit sample for bolus entry: \(sample)")
+                    let value = (Decimal(duration) / 60.0) * amount
+                    let valueRounded = deviceDataManager?.pumpManager?
+                        .roundToSupportedBolusVolume(units: Double(value)) ?? Double(value)
+
+                    // Use binary search for efficient lookup of matching entry
+                    if let matchingIndex = binarySearch(entries: existingTempBasalEntries, timestamp: event.timestamp) {
+                        let predecessorIndex = matchingIndex - 1
+
+                        if predecessorIndex >= 0 {
+                            let predecessorEntry = existingTempBasalEntries[predecessorIndex]
+
+                            if let adjustedSample = processPredecessorEntry(
+                                predecessorEntry,
+                                nextEventTimestamp: event.timestamp,
+                                sampleType: sampleType
+                            ) {
+                                insulinSamples.append(adjustedSample)
+                            }
+                        }
+
+                        let newEvent = PumpHistoryEvent(
+                            id: event.id,
+                            type: .tempBasal,
+                            timestamp: event.timestamp,
+                            amount: Decimal(valueRounded),
+                            duration: event.duration
+                        )
+
+                        if let sample = createSample(for: newEvent, sampleType: sampleType) {
+                            debug(.service, "Created HealthKit sample for initial temp basal entry: \(sample)")
                             insulinSamples.append(sample)
                         }
-                    case .tempBasal:
-                        // For temp basal events, process them and adjust overlapping durations if necessary
-                        guard let duration = event.duration, let amount = event.amount else { continue }
-
-                        let value = (Decimal(duration) / 60.0) * amount
-                        let valueRounded = self.deviceDataManager?.pumpManager?
-                            .roundToSupportedBolusVolume(units: Double(value)) ?? Double(value)
-
-                        // Use binary search for efficient lookup of matching entry
-                        if let matchingIndex = self.binarySearch(entries: existingTempBasalEntries, timestamp: event.timestamp) {
-                            let predecessorIndex = matchingIndex - 1
-
-                            if predecessorIndex >= 0 {
-                                let predecessorEntry = existingTempBasalEntries[predecessorIndex]
-
-                                if let adjustedSample = self.processPredecessorEntry(
-                                    predecessorEntry,
-                                    nextEventTimestamp: event.timestamp,
-                                    sampleType: sampleType
-                                ) {
-                                    insulinSamples.append(adjustedSample)
-                                }
-                            }
-
-                            let newEvent = PumpHistoryEvent(
-                                id: event.id,
-                                type: .tempBasal,
-                                timestamp: event.timestamp,
-                                amount: Decimal(valueRounded),
-                                duration: event.duration
-                            )
-
-                            if let sample = self.createSample(for: newEvent, sampleType: sampleType) {
-                                debug(.service, "Created HealthKit sample for initial temp basal entry: \(sample)")
-                                insulinSamples.append(sample)
-                            }
-                        }
-
-                    default:
-                        break
                     }
+
+                default:
+                    break
                 }
             }
 
@@ -480,7 +453,7 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
     }
 
     // Helper function to perform binary search on the sorted entries by timestamp
-    private func binarySearch(entries: [PumpEventStored], timestamp: Date) -> Int? {
+    private func binarySearch(entries: [PumpEventDetails], timestamp: Date) -> Int? {
         var lowerBound = 0
         var upperBound = entries.count - 1
 
@@ -542,13 +515,13 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
 
     // Helper function to process a predecessor temp basal entry and adjust overlapping durations
     private func processPredecessorEntry(
-        _ predecessorEntry: PumpEventStored,
+        _ predecessorEntry: PumpEventDetails,
         nextEventTimestamp: Date,
         sampleType: HKQuantityType
     ) -> HKQuantitySample? {
         // Ensure the predecessor entry has the necessary data
         guard let predecessorTimestamp = predecessorEntry.timestamp,
-              let predecessorEntryId = predecessorEntry.id else { return nil }
+              let predecessorEntryId = predecessorEntry.event.id else { return nil }
 
         // Calculate the original end date of the predecessor temp basal
         let predecessorDurationMinutes = predecessorEntry.tempBasal?.duration ?? 0
@@ -564,7 +537,7 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
             let adjustedDurationHours = adjustedDuration / 3600
 
             // Calculate the insulin rate and adjusted delivered units
-            let predecessorEntryRate = predecessorEntry.tempBasal?.rate?.doubleValue ?? 0
+            let predecessorEntryRate = predecessorEntry.tempBasal?.rate.map { NSDecimalNumber(decimal: $0).doubleValue } ?? 0
             let adjustedDeliveredUnits = adjustedDurationHours * predecessorEntryRate
             let adjustedDeliveredUnitsRounded = deviceDataManager?.pumpManager?
                 .roundToSupportedBolusVolume(units: adjustedDeliveredUnits) ?? adjustedDeliveredUnits
@@ -596,26 +569,13 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
     }
 
     private func updateInsulinAsUploaded(_ insulin: [PumpHistoryEvent]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updateInsulinAsUploaded"
-        await context.perform {
-            let ids = insulin.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<PumpEventStored> = PumpEventStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToHealth = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToHealth: \(error.userInfo)"
-                )
-            }
+        let ids = insulin.map(\.id)
+        do {
+            try await PumpEventStore.markUploaded(channel: .health, ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToHealth: \(error)"
+            )
         }
     }
 

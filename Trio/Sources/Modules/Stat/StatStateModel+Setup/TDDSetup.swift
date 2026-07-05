@@ -34,129 +34,68 @@ extension Stat.StateModel {
     /// - Returns: A tuple containing hourly and daily TDD statistics arrays
     /// - Note: Processes both hourly statistics for the last 10 days and complete daily statistics
     private func fetchTDDStats() async throws -> (hourly: [TDDStats], daily: [TDDStats]) {
-        let tddTaskContext = CoreDataStack.shared.newTaskContext()
-        tddTaskContext.name = "StatStateModel.fetchTDDStats"
-
         // MARK: - Fetch Required Data
 
         let calendar = Calendar.current
 
-        // Daily statistics: TDD now comes from GRDB (value types, processed off the Core Data context)
+        // Daily statistics: TDD comes from GRDB (value types)
         let threeMonthsAgo = Date().addingTimeInterval(-3.months.timeInterval)
         let tddRecords = try await TDDStore.entries(since: threeMonthsAgo)
         let dailyStats = processDailyTDDs(tddRecords, calendar: calendar)
 
-        // Hourly statistics still come from Core Data (BolusStored / TempBasalStored / PumpEventStored)
+        // Hourly statistics come from GRDB (bolus / temp-basal / suspend-resume pump events)
         let (
-            bolusResults,
-            tempBasalResults,
+            boluses,
+            tempBasals,
             suspendEvents,
             resumeEvents
-        ) = try await fetchHourlyInsulinRecords(on: tddTaskContext)
+        ) = try await fetchHourlyInsulinRecords()
 
-        // MARK: - Process Hourly Data on Background Context
+        // MARK: - Process Hourly Data
 
-        var hourlyStats: [TDDStats] = []
-
-        await tddTaskContext.perform {
-            // Process hourly statistics from BolusStored and TempBasalStored
-            if let fetchedBoluses = bolusResults as? [BolusStored],
-               let fetchedTempBasals = tempBasalResults as? [TempBasalStored],
-               let fetchedSuspendEvents = suspendEvents as? [PumpEventStored],
-               let fetchedResumeEvents = resumeEvents as? [PumpEventStored]
-            {
-                hourlyStats = self.processHourlyInsulinData(
-                    boluses: fetchedBoluses,
-                    tempBasals: fetchedTempBasals,
-                    suspendEvents: fetchedSuspendEvents,
-                    resumeEvents: fetchedResumeEvents,
-                    calendar: calendar
-                )
-            }
-        }
+        let hourlyStats = processHourlyInsulinData(
+            boluses: boluses,
+            tempBasals: tempBasals,
+            suspendEvents: suspendEvents,
+            resumeEvents: resumeEvents,
+            calendar: calendar
+        )
 
         return (hourlyStats, dailyStats)
     }
 
-    /// Fetches BolusStored and TempBasalStored records from CoreData for hourly statistics
-    /// - Returns: A tuple containing the results of both fetch requests
+    /// Fetches bolus / temp-basal / suspend-resume pump events from GRDB for hourly statistics
+    /// - Returns: A tuple containing the four detail arrays (ascending by timestamp)
     /// - Note: Fetches records from the last 20 days for detailed hourly view
-    private func fetchHourlyInsulinRecords(on tddTaskContext: NSManagedObjectContext) async throws
-        -> (bolus: Any, tempBasal: Any, suspendEvents: Any, resumeEvents: Any)
+    private func fetchHourlyInsulinRecords() async throws
+        -> (
+            bolus: [PumpEventDetails],
+            tempBasal: [PumpEventDetails],
+            suspendEvents: [PumpEventDetails],
+            resumeEvents: [PumpEventDetails]
+        )
     {
         // Calculate date range for hourly statistics (last 20 days)
         let now = Date()
         let twentyDaysAgo = Calendar.current.date(byAdding: .day, value: -20, to: now) ?? now
 
-        // Create a predicate for the date range
-        let datePredicate = NSPredicate(
-            format: "pumpEvent.timestamp >= %@ AND pumpEvent.timestamp <= %@",
-            twentyDaysAgo as NSDate,
-            now as NSDate
-        )
+        let boluses = try await PumpEventStore
+            .fetchForStats(from: twentyDaysAgo, types: [PumpEventStored.EventType.bolus.rawValue])
+            .filter { ($0.timestamp ?? .distantPast) <= now }
+        let tempBasals = try await PumpEventStore
+            .fetchForStats(from: twentyDaysAgo, types: [PumpEventStored.EventType.tempBasal.rawValue])
+            .filter { ($0.timestamp ?? .distantPast) <= now }
+        let suspendResume = try await PumpEventStore
+            .fetchForStats(from: twentyDaysAgo, types: [
+                PumpEventStored.EventType.pumpSuspend.rawValue,
+                PumpEventStored.EventType.pumpResume.rawValue
+            ])
+            .filter { ($0.timestamp ?? .distantPast) <= now }
 
-        // Fetch bolus records for hourly stats
-        let bolusResults = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: BolusStored.self,
-            onContext: tddTaskContext,
-            predicate: datePredicate,
-            key: "pumpEvent.timestamp",
-            ascending: true,
-            batchSize: 100
-        )
+        let suspendEvents = suspendResume.filter { $0.type == PumpEventStored.EventType.pumpSuspend.rawValue }
+        let resumeEvents = suspendResume.filter { $0.type == PumpEventStored.EventType.pumpResume.rawValue }
 
-        // Fetch temp basal records for hourly stats
-        let tempBasalResults = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: TempBasalStored.self,
-            onContext: tddTaskContext,
-            predicate: datePredicate,
-            key: "pumpEvent.timestamp",
-            ascending: true,
-            batchSize: 100
-        )
-
-        // Create a combined predicate for suspension and resume events
-        let suspendResumeTypes = [
-            PumpEventStored.EventType.pumpSuspend.rawValue,
-            PumpEventStored.EventType.pumpResume.rawValue
-        ]
-
-        let suspendResumePredicate = NSPredicate(
-            format: "timestamp >= %@ AND timestamp <= %@ AND type IN %@",
-            twentyDaysAgo as NSDate,
-            now as NSDate,
-            suspendResumeTypes
-        )
-
-        // Fetch both suspension and resume events in a single query
-        let suspendResumeResults = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: tddTaskContext,
-            predicate: suspendResumePredicate,
-            key: "timestamp",
-            ascending: true,
-            batchSize: 100
-        )
-
-        // Filter the results within the context's perform closure to ensure thread safety
-        let (suspendEvents, resumeEvents) = await tddTaskContext.perform {
-            var suspendEventsArray: [PumpEventStored] = []
-            var resumeEventsArray: [PumpEventStored] = []
-
-            if let pumpEvents = suspendResumeResults as? [PumpEventStored] {
-                for event in pumpEvents {
-                    if event.type == PumpEventStored.EventType.pumpSuspend.rawValue {
-                        suspendEventsArray.append(event)
-                    } else if event.type == PumpEventStored.EventType.pumpResume.rawValue {
-                        resumeEventsArray.append(event)
-                    }
-                }
-            }
-
-            return (suspendEventsArray, resumeEventsArray)
-        }
-
-        return (bolusResults, tempBasalResults, suspendEvents, resumeEvents)
+        return (boluses, tempBasals, suspendEvents, resumeEvents)
     }
 
     /// Processes bolus and temporary basal data to create hourly insulin statistics
@@ -172,10 +111,10 @@ extension Stat.StateModel {
     ///         It also properly distributes insulin amounts across hour boundaries for accurate hourly statistics.
     ///         Suspension events are taken into account to prevent counting insulin during pump suspensions.
     private func processHourlyInsulinData(
-        boluses: [BolusStored],
-        tempBasals: [TempBasalStored],
-        suspendEvents: [PumpEventStored],
-        resumeEvents: [PumpEventStored],
+        boluses: [PumpEventDetails],
+        tempBasals: [PumpEventDetails],
+        suspendEvents: [PumpEventDetails],
+        resumeEvents: [PumpEventDetails],
         calendar: Calendar
     ) -> [TDDStats] {
         // Dictionary to store insulin amounts indexed by hour
@@ -185,11 +124,12 @@ extension Stat.StateModel {
 
         // Iterate through all bolus records and add their amounts to the appropriate hourly totals
         for bolus in boluses {
-            guard let timestamp = bolus.pumpEvent?.timestamp,
-                  let amount = bolus.amount?.doubleValue
+            guard let timestamp = bolus.timestamp,
+                  let amountDecimal = bolus.bolus?.amount
             else {
                 continue // Skip entries with missing timestamp or amount
             }
+            let amount = NSDecimalNumber(decimal: amountDecimal).doubleValue
 
             // Create a date representing the hour of this bolus (truncating minutes/seconds)
             let components = calendar.dateComponents([.year, .month, .day, .hour], from: timestamp)
@@ -208,16 +148,18 @@ extension Stat.StateModel {
 
         // Sort temp basals chronologically for accurate duration calculation
         let sortedTempBasals = tempBasals.sorted {
-            ($0.pumpEvent?.timestamp ?? Date.distantPast) < ($1.pumpEvent?.timestamp ?? Date.distantPast)
+            ($0.timestamp ?? Date.distantPast) < ($1.timestamp ?? Date.distantPast)
         }
 
         // Process each temporary basal event
-        for (index, tempBasal) in sortedTempBasals.enumerated() {
-            guard let timestamp = tempBasal.pumpEvent?.timestamp,
-                  let rate = tempBasal.rate?.doubleValue
+        for (index, tempBasalDetail) in sortedTempBasals.enumerated() {
+            guard let timestamp = tempBasalDetail.timestamp,
+                  let tempBasal = tempBasalDetail.tempBasal,
+                  let rateDecimal = tempBasal.rate
             else {
                 continue // Skip entries with missing timestamp or rate
             }
+            let rate = NSDecimalNumber(decimal: rateDecimal).doubleValue
 
             // MARK: Calculate Actual Duration
 
@@ -226,7 +168,7 @@ extension Stat.StateModel {
 
             if index < sortedTempBasals.count - 1 {
                 // For all but the last event, calculate duration as time until next event
-                if let nextTimestamp = sortedTempBasals[index + 1].pumpEvent?.timestamp {
+                if let nextTimestamp = sortedTempBasals[index + 1].timestamp {
                     // Calculate time difference in minutes between this event and the next
                     actualDurationInMinutes = nextTimestamp.timeIntervalSince(timestamp) / 60.0
                 } else {
@@ -273,15 +215,15 @@ extension Stat.StateModel {
     /// - Returns: Array of tuples containing suspend and resume event pairs
     /// - Note: This method pairs suspend events with the next resume event chronologically
     private func createSuspendResumePairs(
-        suspendEvents: [PumpEventStored],
-        resumeEvents: [PumpEventStored]
-    ) -> [(suspend: PumpEventStored, resume: PumpEventStored)] {
+        suspendEvents: [PumpEventDetails],
+        resumeEvents: [PumpEventDetails]
+    ) -> [(suspend: PumpEventDetails, resume: PumpEventDetails)] {
         // Sort events chronologically
         let sortedSuspendEvents = suspendEvents.sorted { ($0.timestamp ?? Date.distantPast) < ($1.timestamp ?? Date.distantPast) }
         let sortedResumeEvents = resumeEvents.sorted { ($0.timestamp ?? Date.distantPast) < ($1.timestamp ?? Date.distantPast) }
 
         // Create pairs of suspend + resume events
-        var pairs: [(suspend: PumpEventStored, resume: PumpEventStored)] = []
+        var pairs: [(suspend: PumpEventDetails, resume: PumpEventDetails)] = []
 
         // Iterate through suspend events and find matching resume events
         for suspendEvent in sortedSuspendEvents {
@@ -316,7 +258,7 @@ extension Stat.StateModel {
         startTime: Date,
         durationInHours: Double,
         rate: Double,
-        suspendResumePairs: [(suspend: PumpEventStored, resume: PumpEventStored)],
+        suspendResumePairs: [(suspend: PumpEventDetails, resume: PumpEventDetails)],
         insulinByHour: inout [Date: Double],
         calendar: Calendar
     ) {
@@ -401,7 +343,7 @@ extension Stat.StateModel {
     private func calculateEffectiveDuration(
         from startTime: Date,
         to endTime: Date,
-        suspendResumePairs: [(suspend: PumpEventStored, resume: PumpEventStored)]
+        suspendResumePairs: [(suspend: PumpEventDetails, resume: PumpEventDetails)]
     ) -> Double {
         // Total duration in hours
         let totalDuration = endTime.timeIntervalSince(startTime) / 3600.0

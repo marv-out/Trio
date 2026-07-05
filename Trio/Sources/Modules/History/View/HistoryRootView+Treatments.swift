@@ -22,8 +22,8 @@ extension History.RootView {
         }.listRowBackground(Color.chart)
     }
 
-    var filteredPumpEvents: [PumpEventStored] {
-        pumpEventStored.filter { item in
+    var filteredPumpEvents: [PumpEventDetails] {
+        state.pumpEventStored.filter { item in
             // First filter by date
             let passesDateFilter = !showFutureEntries ? item.timestamp ?? Date() <= Date() : true
 
@@ -48,13 +48,13 @@ extension History.RootView {
         }
     }
 
-    @ViewBuilder func treatmentView(_ item: PumpEventStored) -> some View {
+    @ViewBuilder func treatmentView(_ item: PumpEventDetails) -> some View {
         HStack {
             if let bolus = item.bolus, let amount = bolus.amount {
                 Image(systemName: "circle.fill").foregroundColor(Color.insulin)
                 Text(bolus.isSMB ? "SMB" : item.type ?? "Bolus")
                 Text(
-                    (Formatter.decimalFormatterWithThreeFractionDigits.string(from: amount) ?? "0") +
+                    (Formatter.decimalFormatterWithThreeFractionDigits.string(from: amount as NSDecimalNumber) ?? "0") +
                         String(localized: " U", comment: "Insulin unit")
                 )
                 .foregroundColor(.secondary)
@@ -65,7 +65,7 @@ extension History.RootView {
                 Image(systemName: "circle.fill").foregroundColor(Color.insulin.opacity(0.4))
                 Text("Temp Basal")
                 Text(
-                    (Formatter.decimalFormatterWithThreeFractionDigits.string(from: rate) ?? "0") +
+                    (Formatter.decimalFormatterWithThreeFractionDigits.string(from: rate as NSDecimalNumber) ?? "0") +
                         String(localized: " U/hr", comment: "Unit insulin per hour")
                 )
                 .foregroundColor(.secondary)

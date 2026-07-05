@@ -48,102 +48,100 @@ extension Stat.StateModel {
     /// 3. Calculates total insulin for each time period
     /// 4. Returns the processed statistics as (hourly: [BolusStats], daily: [BolusStats])
     private func fetchBolusStats() async throws -> (hourly: [BolusStats], daily: [BolusStats]) {
-        let bolusTaskContext = CoreDataStack.shared.newTaskContext()
-        bolusTaskContext.name = "StatStateModel.fetchBolusStats"
-
-        // Fetch PumpEventStored entries from Core Data
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: BolusStored.self,
-            onContext: bolusTaskContext,
-            predicate: NSPredicate.pumpHistoryForStats,
-            key: "pumpEvent.timestamp",
-            ascending: true,
-            batchSize: 100
+        // Fetch bolus pump events from GRDB (`pumpHistoryForStats` = last 3 months).
+        let details = try await PumpEventStore.fetchForStats(
+            from: Date.threeMonthsAgo,
+            types: [PumpEventStored.EventType.bolus.rawValue]
         )
 
-        // Variables to hold the results
-        var hourlyStats: [BolusStats] = []
-        var dailyStats: [BolusStats] = []
+        // Flatten to (timestamp, isSMB, isExternal, amount) — the only fields the grouping needs.
+        struct BolusEntry {
+            let timestamp: Date
+            let isSMB: Bool
+            let isExternal: Bool
+            let amount: Double
+        }
+        let fetchedResults: [BolusEntry] = details.compactMap { detail in
+            guard let bolus = detail.bolus, let timestamp = detail.timestamp else { return nil }
+            return BolusEntry(
+                timestamp: timestamp,
+                isSMB: bolus.isSMB,
+                isExternal: bolus.isExternal,
+                amount: (bolus.amount ?? 0).doubleValue
+            )
+        }
 
-        // Process CoreData results within the context's thread
-        await bolusTaskContext.perform {
-            guard let fetchedResults = results as? [BolusStored] else {
-                return
-            }
+        let calendar = Calendar.current
 
-            let calendar = Calendar.current
+        // Group entries by hour for hourly statistics
+        let now = Date()
+        let twentyDaysAgo = Calendar.current.date(byAdding: .day, value: -20, to: now) ?? now
 
-            // Group entries by hour for hourly statistics
-            let now = Date()
-            let twentyDaysAgo = Calendar.current.date(byAdding: .day, value: -20, to: now) ?? now
+        let hourlyGrouped = Dictionary(grouping: fetchedResults.filter { entry in
+            entry.timestamp >= twentyDaysAgo && entry.timestamp <= now
+        }) { entry in
+            let components = calendar.dateComponents(
+                [.year, .month, .day, .hour],
+                from: entry.timestamp
+            )
+            return calendar.date(from: components) ?? Date()
+        }
 
-            let hourlyGrouped = Dictionary(grouping: fetchedResults.filter { entry in
-                guard let date = entry.pumpEvent?.timestamp else { return false }
-                return date >= twentyDaysAgo && date <= now
-            }) { entry in
-                let components = calendar.dateComponents(
-                    [.year, .month, .day, .hour],
-                    from: entry.pumpEvent?.timestamp ?? Date()
-                )
-                return calendar.date(from: components) ?? Date()
-            }
+        // Group entries by day for daily statistics
+        let dailyGrouped = Dictionary(grouping: fetchedResults) { entry in
+            calendar.startOfDay(for: entry.timestamp)
+        }
 
-            // Group entries by day for daily statistics
-            let dailyGrouped = Dictionary(grouping: fetchedResults) { entry in
-                calendar.startOfDay(for: entry.pumpEvent?.timestamp ?? Date())
-            }
-
-            // Process hourly stats
-            hourlyStats = hourlyGrouped.keys.sorted().map { timePoint in
-                let entries = hourlyGrouped[timePoint, default: []]
-                return BolusStats(
-                    date: timePoint,
-                    manualBolus: entries.reduce(0.0) { sum, entry in
-                        if !entry.isSMB, !entry.isExternal {
-                            return sum + (entry.amount?.doubleValue ?? 0)
-                        }
-                        return sum
-                    },
-                    smb: entries.reduce(0.0) { sum, entry in
-                        if entry.isSMB {
-                            return sum + (entry.amount?.doubleValue ?? 0)
-                        }
-                        return sum
-                    },
-                    external: entries.reduce(0.0) { sum, entry in
-                        if entry.isExternal {
-                            return sum + (entry.amount?.doubleValue ?? 0)
-                        }
-                        return sum
+        // Process hourly stats
+        let hourlyStats: [BolusStats] = hourlyGrouped.keys.sorted().map { timePoint in
+            let entries = hourlyGrouped[timePoint, default: []]
+            return BolusStats(
+                date: timePoint,
+                manualBolus: entries.reduce(0.0) { sum, entry in
+                    if !entry.isSMB, !entry.isExternal {
+                        return sum + entry.amount
                     }
-                )
-            }
-
-            // Process daily stats
-            dailyStats = dailyGrouped.keys.sorted().map { timePoint in
-                let entries = dailyGrouped[timePoint, default: []]
-                return BolusStats(
-                    date: timePoint,
-                    manualBolus: entries.reduce(0.0) { sum, entry in
-                        if !entry.isSMB, !entry.isExternal {
-                            return sum + (entry.amount?.doubleValue ?? 0)
-                        }
-                        return sum
-                    },
-                    smb: entries.reduce(0.0) { sum, entry in
-                        if entry.isSMB {
-                            return sum + (entry.amount?.doubleValue ?? 0)
-                        }
-                        return sum
-                    },
-                    external: entries.reduce(0.0) { sum, entry in
-                        if entry.isExternal {
-                            return sum + (entry.amount?.doubleValue ?? 0)
-                        }
-                        return sum
+                    return sum
+                },
+                smb: entries.reduce(0.0) { sum, entry in
+                    if entry.isSMB {
+                        return sum + entry.amount
                     }
-                )
-            }
+                    return sum
+                },
+                external: entries.reduce(0.0) { sum, entry in
+                    if entry.isExternal {
+                        return sum + entry.amount
+                    }
+                    return sum
+                }
+            )
+        }
+
+        // Process daily stats
+        let dailyStats: [BolusStats] = dailyGrouped.keys.sorted().map { timePoint in
+            let entries = dailyGrouped[timePoint, default: []]
+            return BolusStats(
+                date: timePoint,
+                manualBolus: entries.reduce(0.0) { sum, entry in
+                    if !entry.isSMB, !entry.isExternal {
+                        return sum + entry.amount
+                    }
+                    return sum
+                },
+                smb: entries.reduce(0.0) { sum, entry in
+                    if entry.isSMB {
+                        return sum + entry.amount
+                    }
+                    return sum
+                },
+                external: entries.reduce(0.0) { sum, entry in
+                    if entry.isExternal {
+                        return sum + entry.amount
+                    }
+                    return sum
+                }
+            )
         }
 
         return (hourlyStats, dailyStats)

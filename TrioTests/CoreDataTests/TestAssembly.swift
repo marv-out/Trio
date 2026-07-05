@@ -11,9 +11,11 @@ class TestAssembly: Assembly {
     }
 
     func assemble(container: Container) {
-        // Override PumpHistoryStorage registration for tests
+        // Override PumpHistoryStorage registration for tests. Pump events now live in GRDB, so this no
+        // longer needs a Core Data context; the GRDB round-trip is tested directly in
+        // PumpHistoryStorageTests against an in-memory pool.
         container.register(PumpHistoryStorage.self) { r in
-            BasePumpHistoryStorage(resolver: r, contextProvider: { self.testContext })
+            BasePumpHistoryStorage(resolver: r)
         }.inObjectScope(.container)
 
         // Override DeterminationStorage registration for tests. Determinations now live in GRDB, so

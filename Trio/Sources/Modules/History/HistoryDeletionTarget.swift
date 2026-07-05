@@ -4,13 +4,13 @@ import Foundation
 extension History {
     enum DeletionTarget: Identifiable {
         case glucose(GlucoseStored)
-        case insulin(PumpEventStored)
+        case insulin(PumpEventDetails)
         case carbs(CarbEntryRecord)
 
         var id: AnyHashable {
             switch self {
             case let .glucose(glucose): return AnyHashable(glucose.objectID)
-            case let .insulin(pumpEvent): return AnyHashable(pumpEvent.objectID)
+            case let .insulin(pumpEvent): return AnyHashable(pumpEvent.event.pk ?? -1)
             case let .carbs(carbEntry): return AnyHashable(carbEntry.pk ?? -1)
             }
         }
@@ -42,7 +42,10 @@ extension History {
             case let .insulin(pumpEvent):
                 var text = Formatter.dateFormatter.string(from: pumpEvent.timestamp ?? Date())
                     + ", "
-                    + (Formatter.decimalFormatterWithThreeFractionDigits.string(from: pumpEvent.bolus?.amount ?? 0) ?? "0")
+                    + (
+                        Formatter.decimalFormatterWithThreeFractionDigits
+                            .string(from: (pumpEvent.bolus?.amount ?? 0) as NSDecimalNumber) ?? "0"
+                    )
                     + String(localized: " U", comment: "Insulin unit")
                 if let bolus = pumpEvent.bolus, bolus.isSMB {
                     text += String(localized: " SMB", comment: "Super Micro Bolus indicator in delete alert")

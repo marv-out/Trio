@@ -600,7 +600,48 @@ extension observations as a follow-up if cross-process observation isn't yet pro
 
 </details>
 
-### 🔧 Step 11 — `PumpEventStored` + `BolusStored` + `TempBasalStored` (planned, not yet implemented)
+### ✅ Step 11 — `PumpEventStored` + `BolusStored` + `TempBasalStored` (done, this branch)
+
+Implemented as planned below. Notable implementation decisions:
+- **Records + `PumpEventDetails` (`Model/GRDB/PumpEventRecord.swift`).** `PumpEventRecord` (`id` String
+  unique, no Decimals — manual `Row`/`PersistenceContainer` for uniformity), `BolusRecord` (`amount`
+  Decimal as TEXT), `TempBasalRecord` (`rate` Decimal as TEXT, `duration` Int16). The FK lives on the
+  children (`pumpEventPk`, `ON DELETE CASCADE`). `PumpEventDetails` (event + optional bolus/tempBasal)
+  is the read shape and carries the ported oref-JSON DTO helpers; the `EventType`/`TempType` enums, the
+  `dateFormatter`, and the `*DTO`/`PumpEventDTO` structs stay on `PumpEventStored`.
+- **Schema v10** — `pumpEventStored` (unique `id`, composite unique `(timestamp, type)` = the dedup
+  backstop, plus `timestamp`/`type`/three-upload-flag indexes), `bolusStored`/`tempBasalStored` (FK
+  index, `ON DELETE CASCADE`). One-time `PumpEventMigration` resolves the two 1:1 relationships parent-
+  first (children via the CD relationship, no objectID map needed). Registered after
+  `OrefDeterminationMigration`, gated `grdb.didMigratePumpEvent`.
+- **Dedup / partial-bolus preserved verbatim.** `BasePumpHistoryStorage.storePumpEvents` keeps the
+  `(timestamp, type)` dedup, the partial-bolus smaller-value `updateBolusAmount` (which re-clears all
+  three upload flags), and the restrict-to-now clamp. It threads an optional `in pool:` seam for tests.
+  ⚠️ **Dedup runs in SQLite, not against a Swift `Date` key** (`PumpEventStore.fetchExisting(timestamp:
+  type:)`): GRDB stores timestamps as millisecond text, so a raw incoming `Date` with sub-millisecond
+  components does not equal the round-tripped value in Swift — an in-memory key let a re-reported
+  (mutable) temp basal slip past every loop cycle, hit the composite unique index, and abort the whole
+  dosing write (the loop stalled). The SQL equality binds the `Date` the same way it was persisted, so
+  it matches; each insert commits before the next event, so in-batch duplicates are caught too.
+- **oref read path.** `fetchPumpHistoryObjectIDs`/`parsePumpHistory`/`loadAndMapPumpEvents`/
+  `fetchOrphanedResumes` now operate on `[PumpEventDetails]`; `OpenAPS.loadAndMapPumpEvents(_:orphanedResumes:)`
+  is static (`Set<Int64>`) and keeps the exact DTO ordering. The **#898 orphaned-resume filter** is
+  preserved, keyed by `pk` (store returns lightweight `(pk, type, timestamp)` suspend/resume rows for
+  the last 48h). `createSimulatedBolusDTO` unchanged.
+- **Reactivity.** `observeForChart()` (Home insulin chart + History list; newest 1000, subscriber
+  applies `oneDayAgo`), `observeLastBolus()` (Home/Treatments last bolus + AppleWatch; newest 100
+  non-external, subscriber applies 20-min), `observeNotYetUploadedCount(channel:)` (the 3 upload
+  triggers). Garmin reads temp basal via a store fetch on its existing determination trigger.
+- **Uploads.** All three channels match on the event `id`; `markUploaded(channel:ids:)`. Health/Tidepool
+  keep their predecessor-temp-basal delivered-units math (now off `PumpEventDetails`, no context).
+- **Tests.** `PumpHistoryStorageTests` rewritten against an in-memory pool (store, dedup, partial-bolus
+  update + flag re-clear, not-yet-uploaded + mark); `JSONImporterTests` pump cases run through
+  `importPumpHistory(url:now:in:)`; `TestAssembly` drops the Core Data `contextProvider`.
+
+The Core Data `PumpEventStored`/`BolusStored`/`TempBasalStored` entities stay as the read-only migration
+source (`PumpEvent+helper` fetch helpers are now dead but left for the final CD cleanup step).
+
+<details><summary>Original plan (for reference)</summary>
 
 The **dosing path — highest risk of the whole migration.** Every bolus and temp basal the pump
 delivers is recorded here, this table feeds the oref algorithm's `pumphistory` **every loop cycle**,
@@ -771,10 +812,12 @@ Core Data `contextProvider` for `PumpHistoryStorage`.
   changed" signal that the Watch/Garmin/chart sinks subscribe to, rather than N independent
   observations — and carry the same consolidation into the later `GlucoseStored` step.
 
+</details>
+
 ### ⏳ After the determination family
 
 1. ~~`OrefDetermination` + `Forecast` + `ForecastValue` — relationship graph, hot path.~~ **✅ done (Step 10).**
-2. `PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk. **Planned: see Step 11 above.**
+2. ~~`PumpEventStored` + `BolusStored` + `TempBasalStored` — dosing path, highest risk.~~ **✅ done (Step 11).**
 3. `GlucoseStored` (+ `DeletedGlucoseStored` 9b, if still deferred) — highest read volume; uses
    `ValueObservation` for the live charts.
 

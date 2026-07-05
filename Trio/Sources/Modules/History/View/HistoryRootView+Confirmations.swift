@@ -21,7 +21,9 @@ extension History.RootView {
                     case let .glucose(glucose):
                         state.invokeGlucoseDeletionTask(glucose.objectID)
                     case let .insulin(pumpEvent):
-                        state.invokeInsulinDeletionTask(pumpEvent.objectID)
+                        if let pk = pumpEvent.event.pk {
+                            state.invokeInsulinDeletionTask(pk)
+                        }
                     case let .carbs(carbEntry):
                         if let pk = carbEntry.pk {
                             state.invokeCarbDeletionTask(

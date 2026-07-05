@@ -156,21 +156,9 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     var tempTargetUploadObservationCancellable: AnyCancellable?
     var tempTargetRunUploadObservationCancellable: AnyCancellable?
 
-    let pumpEventUploadControllerDelegate = FetchedResultsControllerDelegate()
-    lazy var pumpEventUploadController: NSFetchedResultsController<PumpEventStored> = {
-        let request = NSFetchRequest<PumpEventStored>(entityName: "PumpEventStored")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: true)]
-        request.predicate = NSPredicate.pumpEventsNotYetUploadedToNightscout
-        request.fetchBatchSize = 50
-        let controller = NSFetchedResultsController(
-            fetchRequest: request,
-            managedObjectContext: viewContext,
-            sectionNameKeyPath: nil,
-            cacheName: nil
-        )
-        controller.delegate = pumpEventUploadControllerDelegate
-        return controller
-    }()
+    // Pump events now live in GRDB; the "not yet uploaded" trigger is a ValueObservation
+    // (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
+    var pumpEventUploadObservationCancellable: AnyCancellable?
 
     // Carbs (+ their FPU equivalents) now live in GRDB; the "not yet uploaded" trigger is a
     // ValueObservation (see BaseNightscoutManager+Subscribers.wireUploadControllers) instead of an FRC.
@@ -917,26 +905,13 @@ final class BaseNightscoutManager: NightscoutManager, Injectable {
     }
 
     private func updatePumpEventStoredsAsUploaded(_ treatments: [NightscoutTreatment]) async {
-        let context = CoreDataStack.shared.newTaskContext()
-        context.name = "updatePumpEventStoredsAsUploaded"
-        await context.perform {
-            let ids = treatments.map(\.id) as NSArray
-            let fetchRequest: NSFetchRequest<PumpEventStored> = PumpEventStored.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "id IN %@", ids)
-
-            do {
-                let results = try context.fetch(fetchRequest)
-                for result in results {
-                    result.isUploadedToNS = true
-                }
-
-                guard context.hasChanges else { return }
-                try context.save()
-            } catch let error as NSError {
-                debugPrint(
-                    "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error.userInfo)"
-                )
-            }
+        let ids = treatments.compactMap(\.id)
+        do {
+            try await PumpEventStore.markUploaded(channel: .nightscout, ids: ids)
+        } catch {
+            debugPrint(
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Failed to update isUploadedToNS: \(error)"
+            )
         }
     }
 

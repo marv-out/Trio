@@ -4,7 +4,7 @@ import SwiftUI
 
 struct InsulinView: ChartContent {
     let glucoseData: [GlucoseStored]
-    let insulinData: [PumpEventStored]
+    let insulinData: [PumpEventDetails]
     let units: GlucoseUnits
     let bolusDisplayThreshold: BolusDisplayThreshold
 
@@ -14,7 +14,7 @@ struct InsulinView: ChartContent {
 
     private func drawBoluses() -> some ChartContent {
         ForEach(insulinData) { insulin in
-            let amount = insulin.bolus?.amount ?? 0 as NSDecimalNumber
+            let amount = insulin.bolus?.amount ?? 0
             let bolusDate = insulin.timestamp ?? Date()
 
             if amount != 0, let glucose = MainChartHelper.timeToNearestGlucose(
@@ -23,7 +23,10 @@ struct InsulinView: ChartContent {
             )?.glucose {
                 let yPosition = (units == .mgdL ? Decimal(glucose) : Decimal(glucose).asMmolL) + MainChartHelper
                     .bolusOffset(units: units)
-                let size = (MainChartHelper.Config.bolusSize + CGFloat(truncating: amount) * MainChartHelper.Config.bolusScale)
+                let size = (
+                    MainChartHelper.Config.bolusSize + CGFloat(truncating: amount as NSDecimalNumber) * MainChartHelper.Config
+                        .bolusScale
+                )
 
                 PointMark(
                     x: .value("Time", bolusDate, unit: .second),
@@ -33,8 +36,8 @@ struct InsulinView: ChartContent {
                     Image(systemName: "arrowtriangle.down.fill").font(.system(size: size)).foregroundStyle(Color.insulin)
                 }
                 .annotation(position: .top) {
-                    if amount as Decimal >= bolusDisplayThreshold.rawValue {
-                        Text(Formatter.bolusFormatter.string(from: amount) ?? "")
+                    if amount >= bolusDisplayThreshold.rawValue {
+                        Text(Formatter.bolusFormatter.string(from: amount as NSDecimalNumber) ?? "")
                             .font(.caption2)
                             .foregroundStyle(Color.primary)
                     }

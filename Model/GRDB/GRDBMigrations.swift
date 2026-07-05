@@ -328,6 +328,75 @@ extension GRDBStack {
             try db.create(index: "forecastValueStored_on_index", on: "forecastValueStored", columns: ["index"])
         }
 
+        // v10 — PumpEventStored + BolusStored + TempBasalStored (the dosing path). `PumpEventStored`
+        // is the parent with two optional 1:1 children (`bolus`, `tempBasal`); the Core Data `pumpEvent`
+        // to-one relationships become the `pumpEventPk` foreign keys on the child tables. Both FKs are
+        // `ON DELETE CASCADE` — a bolus/temp basal has no meaning without its event, and the lifecycle
+        // deletes children with the parent. `id` (String business UUID) carries a **unique index** and
+        // `(timestamp, type)` a **composite unique index**, mirroring the two Core Data uniqueness
+        // constraints that back the batched de-duplication. The parent has no Decimals; the child
+        // `amount`/`rate` are stored as TEXT (lossless), like `TDDRecord`.
+        migrator.registerMigration("v10_pumpEvent") { db in
+            try db.create(table: "pumpEventStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("id", .text) // business UUID string (unique — see index below)
+                t.column("timestamp", .datetime)
+                t.column("type", .text) // EventType raw value
+                t.column("note", .text)
+                t.column("isUploadedToNS", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToHealth", .boolean).notNull().defaults(to: false)
+                t.column("isUploadedToTidepool", .boolean).notNull().defaults(to: false)
+            }
+            // Core Data uniqueness constraints: `id`, and the composite `(timestamp, type)` that backs
+            // the (timestamp, type) de-dup and is the race-safe backstop against concurrent inserts.
+            try db.create(index: "pumpEventStored_on_id", on: "pumpEventStored", columns: ["id"], unique: true)
+            try db.create(
+                index: "pumpEventStored_on_timestamp_type",
+                on: "pumpEventStored",
+                columns: ["timestamp", "type"],
+                unique: true
+            )
+            // History/chart/upload queries filter/sort on timestamp; type splits the event kinds; each
+            // upload channel filters on its own flag.
+            try db.create(index: "pumpEventStored_on_timestamp", on: "pumpEventStored", columns: ["timestamp"])
+            try db.create(index: "pumpEventStored_on_type", on: "pumpEventStored", columns: ["type"])
+            try db.create(index: "pumpEventStored_on_isUploadedToNS", on: "pumpEventStored", columns: ["isUploadedToNS"])
+            try db.create(
+                index: "pumpEventStored_on_isUploadedToHealth",
+                on: "pumpEventStored",
+                columns: ["isUploadedToHealth"]
+            )
+            try db.create(
+                index: "pumpEventStored_on_isUploadedToTidepool",
+                on: "pumpEventStored",
+                columns: ["isUploadedToTidepool"]
+            )
+
+            try db.create(table: "bolusStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("amount", .text) // Decimal as string (lossless)
+                t.column("isSMB", .boolean).notNull().defaults(to: false)
+                t.column("isExternal", .boolean).notNull().defaults(to: false)
+                // Replaces the Core Data `pumpEvent` to-one relationship. CASCADE so a bolus dies with
+                // its event.
+                t.column("pumpEventPk", .integer)
+                    .references("pumpEventStored", onDelete: .cascade)
+            }
+            try db.create(index: "bolusStored_on_pumpEventPk", on: "bolusStored", columns: ["pumpEventPk"])
+
+            try db.create(table: "tempBasalStored") { t in
+                t.autoIncrementedPrimaryKey("pk")
+                t.column("duration", .integer).notNull().defaults(to: 0) // minutes (Int16)
+                t.column("rate", .text) // Decimal as string (lossless)
+                t.column("tempType", .text)
+                // Replaces the Core Data `pumpEvent` to-one relationship. CASCADE so a temp basal dies
+                // with its event.
+                t.column("pumpEventPk", .integer)
+                    .references("pumpEventStored", onDelete: .cascade)
+            }
+            try db.create(index: "tempBasalStored_on_pumpEventPk", on: "tempBasalStored", columns: ["pumpEventPk"])
+        }
+
         return migrator
     }
 }

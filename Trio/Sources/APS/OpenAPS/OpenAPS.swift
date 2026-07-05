@@ -186,33 +186,18 @@ final class OpenAPS {
         return jsonArray
     }
 
-    private func fetchPumpHistoryObjectIDs(on context: NSManagedObjectContext) async throws -> [NSManagedObjectID]? {
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: context,
-            predicate: NSPredicate.pumpHistoryLast1440Minutes,
-            key: "timestamp",
-            ascending: false,
-            batchSize: 50,
-            relationshipKeyPathsForPrefetching: ["bolus", "tempBasal"]
-        )
-
-        return try await context.perform {
-            guard let pumpEventResults = results as? [PumpEventStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return pumpEventResults.map(\.objectID)
-        }
+    /// The oref pump-history read window (last 24h), newest first — replaces `fetchPumpHistoryObjectIDs`
+    /// (the `NSManagedObjectID` list is gone; `PumpEventDetails` value types cross threads directly).
+    private func fetchPumpHistoryDetails() async throws -> [PumpEventDetails] {
+        try await PumpEventStore.fetchForOref(within: 1440)
     }
 
     private func parsePumpHistory(
-        on context: NSManagedObjectContext,
-        _ pumpHistoryObjectIDs: [NSManagedObjectID],
+        _ pumpHistory: [PumpEventDetails],
         simulatedBolusAmount: Decimal? = nil
     ) async throws -> String {
-        // Return an empty JSON object if the list of object IDs is empty
-        guard !pumpHistoryObjectIDs.isEmpty else { return "{}" }
+        // Return an empty JSON object if there is no pump history
+        guard !pumpHistory.isEmpty else { return "{}" }
 
         // Addresses https://github.com/nightscout/Trio/issues/898
         //
@@ -220,46 +205,32 @@ final class OpenAPS {
         // the oldest event in pump history can be a resume with no preceding pump
         // activity. oref interprets this as the end of a suspend that never started,
         // which drives negative IOB and can cause excessive insulin delivery.
-        let orphanedResumes = try await fetchOrphanedResumes(on: context)
+        let orphanedResumes = try await fetchOrphanedResumes()
 
-        // Execute all operations on the background context
-        return await context.perform {
-            // Load and map pump events to DTOs
-            var dtos = self.loadAndMapPumpEvents(pumpHistoryObjectIDs, orphanedResumes: orphanedResumes, on: context)
+        // Load and map pump events to DTOs
+        var dtos = OpenAPS.loadAndMapPumpEvents(pumpHistory, orphanedResumes: orphanedResumes)
 
-            // Optionally add the IOB as a DTO
-            if let simulatedBolusAmount = simulatedBolusAmount {
-                let simulatedBolusDTO = self.createSimulatedBolusDTO(simulatedBolusAmount: simulatedBolusAmount)
-                dtos.insert(simulatedBolusDTO, at: 0)
-            }
-
-            // Convert the DTOs to JSON
-            return self.jsonConverter.convertToJSON(dtos)
+        // Optionally add the IOB as a DTO
+        if let simulatedBolusAmount = simulatedBolusAmount {
+            let simulatedBolusDTO = createSimulatedBolusDTO(simulatedBolusAmount: simulatedBolusAmount)
+            dtos.insert(simulatedBolusDTO, at: 0)
         }
+
+        // Convert the DTOs to JSON
+        return jsonConverter.convertToJSON(dtos)
     }
 
-    private func loadAndMapPumpEvents(
-        _ pumpHistoryObjectIDs: [NSManagedObjectID],
-        orphanedResumes: [NSManagedObjectID],
-        on context: NSManagedObjectContext
-    ) -> [PumpEventDTO] {
-        OpenAPS.loadAndMapPumpEvents(pumpHistoryObjectIDs, orphanedResumes: orphanedResumes, from: context)
-    }
-
-    /// Fetches and parses pump events, expose this as static and not private for testing
+    /// Maps pump events to oref DTOs, dropping the cold-start orphaned resumes (keyed by `pk`). Static
+    /// and not private for testing. The DTO ordering per event (bolus → tempBasalDuration → tempBasal →
+    /// suspend → resume → rewind → prime) is preserved exactly.
     static func loadAndMapPumpEvents(
-        _ pumpHistoryObjectIDs: [NSManagedObjectID],
-        orphanedResumes: [NSManagedObjectID],
-        from context: NSManagedObjectContext
+        _ pumpHistory: [PumpEventDetails],
+        orphanedResumes: Set<Int64>
     ) -> [PumpEventDTO] {
-        let orphanedSet = Set(orphanedResumes)
-        let filteredObjectIds = pumpHistoryObjectIDs.filter { !orphanedSet.contains($0) }
-        // Load the pump events from the object IDs
-        let pumpHistory: [PumpEventStored] = filteredObjectIds
-            .compactMap { context.object(with: $0) as? PumpEventStored }
+        let filtered = pumpHistory.filter { !orphanedResumes.contains($0.event.pk ?? -1) }
 
         // Create the DTOs
-        let dtos: [PumpEventDTO] = pumpHistory.flatMap { event -> [PumpEventDTO] in
+        let dtos: [PumpEventDTO] = filtered.flatMap { event -> [PumpEventDTO] in
             var eventDTOs: [PumpEventDTO] = []
             if let bolusDTO = event.toBolusDTOEnum() {
                 eventDTOs.append(bolusDTO)
@@ -308,54 +279,42 @@ final class OpenAPS {
         return .bolus(bolusDTO)
     }
 
-    /// Detects a cold-start orphaned resume: returns the resume's object ID if it's an orphaned resume
-    private func fetchOrphanedResumes(on context: NSManagedObjectContext) async throws -> [NSManagedObjectID] {
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
-            ofType: PumpEventStored.self,
-            onContext: context,
-            predicate: NSPredicate.pumpHistoryLast48h,
-            key: "timestamp",
-            ascending: true,
-            batchSize: 250
-        )
+    /// Detects cold-start orphaned resumes (issue #898): returns the `pk`s of resume events that have no
+    /// paired suspend within the most recent 24 hours. The store returns lightweight `(pk, type,
+    /// timestamp)` suspend/resume rows for the last 48h, ascending — the 48h window is 24h of pump
+    /// history plus 24h of inspection for resumes. Logic preserved verbatim, keyed by `pk` instead of
+    /// `NSManagedObjectID`.
+    private func fetchOrphanedResumes() async throws -> Set<Int64> {
+        let pumpEventResults = try await PumpEventStore.fetchOrphanedResumeRows(within: 48)
 
-        return try await context.perform {
-            guard let pumpEventResultsFull = results as? [PumpEventStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            let pumpEventResults = pumpEventResultsFull
-                .filter { $0.type == EventType.pumpSuspend.rawValue || $0.type == EventType.pumpResume.rawValue }
-
-            // we define an orphaned resume as one without a paired suspend within
-            // the most recent 24 hours.
-            // **Important**: we pick 48 hours because the standard pump history
-            // is 24 hours + 24 hours of inspection for resumes.
-            let orphanedResumes = zip(pumpEventResults, pumpEventResults.dropFirst())
-                .compactMap { (prev, curr) -> PumpEventStored? in
-                    guard let prevTimestamp = prev.timestamp, let currTimestamp = curr.timestamp else {
-                        return nil
-                    }
-                    let interval = currTimestamp.timeIntervalSince(prevTimestamp)
-
-                    // check if the current event is an orphaned resume
-                    //  - previous event not a suspend
-                    //  - previous event is a suspend but it's more than 24 hours ago
-                    if curr.type == EventType.pumpResume.rawValue,
-                       prev.type != EventType.pumpSuspend.rawValue || interval > TimeInterval(hours: 24)
-                    {
-                        return curr
-                    }
+        // we define an orphaned resume as one without a paired suspend within
+        // the most recent 24 hours.
+        // **Important**: we pick 48 hours because the standard pump history
+        // is 24 hours + 24 hours of inspection for resumes.
+        let orphanedResumes = zip(pumpEventResults, pumpEventResults.dropFirst())
+            .compactMap { (prev, curr) -> Int64? in
+                guard let prevTimestamp = prev.timestamp, let currTimestamp = curr.timestamp else {
                     return nil
                 }
-            // check the first event to see if it's an orphaned resume
-            let firstResumeOrphaned = pumpEventResults.first.flatMap({ event -> [PumpEventStored]? in
-                guard event.type == EventType.pumpResume.rawValue else { return nil }
-                return [event]
-            }) ?? []
+                let interval = currTimestamp.timeIntervalSince(prevTimestamp)
 
-            return (firstResumeOrphaned + orphanedResumes).map(\.objectID)
-        }
+                // check if the current event is an orphaned resume
+                //  - previous event not a suspend
+                //  - previous event is a suspend but it's more than 24 hours ago
+                if curr.type == EventType.pumpResume.rawValue,
+                   prev.type != EventType.pumpSuspend.rawValue || interval > TimeInterval(hours: 24)
+                {
+                    return curr.pk
+                }
+                return nil
+            }
+        // check the first event to see if it's an orphaned resume
+        let firstResumeOrphaned: [Int64] = pumpEventResults.first.flatMap({ event -> [Int64]? in
+            guard event.type == EventType.pumpResume.rawValue else { return nil }
+            return [event.pk]
+        }) ?? []
+
+        return Set(firstResumeOrphaned + orphanedResumes)
     }
 
     func determineBasal(
@@ -376,7 +335,7 @@ final class OpenAPS {
         let tempBasal = currentTemp.rawJSON
 
         // Perform asynchronous calls in parallel
-        async let pumpHistoryObjectIDs = fetchPumpHistoryObjectIDs(on: context) ?? []
+        async let pumpHistoryDetails = fetchPumpHistoryDetails()
         async let carbs = fetchAndProcessCarbs(
             additionalCarbs: simulatedCarbsAmount ?? 0,
             carbsDate: simulatedCarbsDate
@@ -410,7 +369,7 @@ final class OpenAPS {
             reservoir,
             hasSufficientTdd
         ) = await (
-            try parsePumpHistory(on: context, await pumpHistoryObjectIDs, simulatedBolusAmount: simulatedBolusAmount),
+            try parsePumpHistory(await pumpHistoryDetails, simulatedBolusAmount: simulatedBolusAmount),
             try carbs,
             try glucose,
             try prepareTrioCustomOrefVariables,
@@ -565,7 +524,7 @@ final class OpenAPS {
         let context = newContext("autosense")
 
         // Perform asynchronous calls in parallel
-        async let pumpHistoryObjectIDs = fetchPumpHistoryObjectIDs(on: context) ?? []
+        async let pumpHistoryDetails = fetchPumpHistoryDetails()
         async let carbs = fetchAndProcessCarbs()
         async let glucose = fetchAndProcessGlucose(context: context, shouldSmoothGlucose: shouldSmoothGlucose, fetchLimit: nil)
         async let getProfile = loadFileFromStorageAsync(name: Settings.profile)
@@ -574,7 +533,7 @@ final class OpenAPS {
 
         // Await the results of asynchronous tasks
         let (pumpHistoryJSON, carbsAsJSON, glucoseAsJSON, profile, basalProfile, tempTargets) = await (
-            try parsePumpHistory(on: context, await pumpHistoryObjectIDs),
+            try parsePumpHistory(await pumpHistoryDetails),
             try carbs,
             try glucose,
             getProfile,

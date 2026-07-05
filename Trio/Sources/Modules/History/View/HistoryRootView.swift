@@ -28,12 +28,8 @@ extension History {
             animation: .bouncy
         ) var glucoseStored: FetchedResults<GlucoseStored>
 
-        @FetchRequest(
-            entity: PumpEventStored.entity(),
-            sortDescriptors: [NSSortDescriptor(keyPath: \PumpEventStored.timestamp, ascending: false)],
-            predicate: NSPredicate.pumpHistoryLast24h,
-            animation: .bouncy
-        ) var pumpEventStored: FetchedResults<PumpEventStored>
+        // Pump events (incl. boluses + temp basals) now live in GRDB; `state.pumpEventStored` is kept
+        // current via ValueObservation (see HistoryStateModel), sorted newest-first.
 
         // Carbs (+ FPU equivalents) now live in GRDB; `state.carbEntryStored` is kept current via
         // ValueObservation (see HistoryStateModel), sorted newest-first.

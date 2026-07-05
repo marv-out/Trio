@@ -34,6 +34,12 @@ extension History {
         var carbEntryStored: [CarbEntryRecord] = []
         @ObservationIgnored private var carbEntryObservationCancellable: AnyCancellable?
 
+        // Pump events (incl. boluses + temp basals) now live in GRDB; the insulin list is observed via
+        // ValueObservation instead of a SwiftUI @FetchRequest. The "timestamp >= oneDayAgo" rule (from
+        // `pumpHistoryLast24h`) is applied in the sink so the tracked region stays deterministic.
+        var pumpEventStored: [PumpEventDetails] = []
+        @ObservationIgnored private var pumpEventObservationCancellable: AnyCancellable?
+
         // Override + temp target runs now live in GRDB; observed via ValueObservation instead of a
         // SwiftUI @FetchRequest. The "startDate >= oneDayAgo" rule is applied in the sink.
         var overrideRunStored: [OverrideRunRecord] = []
@@ -46,8 +52,26 @@ extension History {
             broadcaster.register(DeterminationObserver.self, observer: self)
             broadcaster.register(SettingsObserver.self, observer: self)
             setupCarbEntryObservation()
+            setupPumpEventObservation()
             setupOverrideRunObservation()
             setupTempTargetRunObservation()
+        }
+
+        private func setupPumpEventObservation() {
+            pumpEventObservationCancellable = PumpEventStore.observeForChart()
+                .receive(on: DispatchQueue.main)
+                .sink(
+                    receiveCompletion: { completion in
+                        if case let .failure(error) = completion {
+                            debug(.default, "\(DebuggingIdentifiers.failed) History pump event observation failed: \(error)")
+                        }
+                    },
+                    receiveValue: { [weak self] details in
+                        guard let self else { return }
+                        let cutoff = Date.oneDayAgo
+                        pumpEventStored = details.filter { ($0.timestamp ?? .distantPast) >= cutoff }
+                    }
+                )
         }
 
         private func setupCarbEntryObservation() {
