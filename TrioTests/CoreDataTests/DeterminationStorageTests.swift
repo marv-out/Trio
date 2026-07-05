@@ -114,7 +114,7 @@ import Testing
         #expect(forecastsBefore == 1 && valuesBefore == 3, "Forecast tree should be stored")
 
         // cutoff = now → the 10s-old determination is deleted, cascading to its forecast + values.
-        try await OrefDeterminationStore.deleteOlderThan(days: 0)
+        try await OrefDeterminationStore.deleteOlderThan(days: 0, pool: grdb.pool)
 
         let forecastCount = try await grdb.pool.read { db in try ForecastRecord.fetchCount(db) }
         let valueCount = try await grdb.pool.read { db in try ForecastValueRecord.fetchCount(db) }

@@ -524,10 +524,11 @@ enum OrefDeterminationStore {
     }
 
     /// Deletes determinations older than `days` (periodic cleanup). Cascades to their forecasts and
-    /// (transitively) their forecast values via the `ON DELETE CASCADE` foreign keys.
-    static func deleteOlderThan(days: Int) async throws {
+    /// (transitively) their forecast values via the `ON DELETE CASCADE` foreign keys. `pool == nil` uses
+    /// the shared GRDB store; tests pass an in-memory pool.
+    static func deleteOlderThan(days: Int, pool: DatabasePool? = nil) async throws {
         let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-        _ = try await pool.write { db in
+        _ = try await (pool ?? Self.pool).write { db in
             try OrefDeterminationRecord
                 .filter(OrefDeterminationRecord.Columns.deliverAt < cutoff)
                 .deleteAll(db)

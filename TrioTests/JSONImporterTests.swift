@@ -29,6 +29,15 @@ class BundleReference {}
         grdb = try GRDBStack.makeInMemoryForTests()
     }
 
+    /// GRDB stores dates as `yyyy-MM-dd HH:mm:ss.SSS` (millisecond precision), whereas Core Data stored
+    /// the raw `Date` Double losslessly. A round-tripped GRDB date therefore differs from an
+    /// ISO8601-parsed date by at most a sub-millisecond quantization, which breaks bit-exact `Date ==`.
+    /// Compare within 1 ms — distinct records here are minutes apart, so this can never conflate two.
+    private func sameInstant(_ actual: Date?, _ expected: Date) -> Bool {
+        guard let actual else { return false }
+        return abs(actual.timeIntervalSince(expected)) < 0.001
+    }
+
     @Test("Import glucose history with value checks") func testImportGlucoseHistoryDetails() async throws {
         let testBundle = Bundle(for: BundleReference.self)
         let path = testBundle.path(forResource: "glucose", ofType: "json")!
@@ -43,9 +52,9 @@ class BundleReference {}
 
         #expect(allReadings.count == 274)
         #expect(allReadings.first?.glucose == 115)
-        #expect(allReadings.first?.date == Date("2025-04-28T19:32:51.727Z"))
+        #expect(sameInstant(allReadings.first?.date, Date("2025-04-28T19:32:51.727Z")!))
         #expect(allReadings.last?.glucose == 127)
-        #expect(allReadings.last?.date == Date("2025-04-27T19:37:50.327Z"))
+        #expect(sameInstant(allReadings.last?.date, Date("2025-04-27T19:37:50.327Z")!))
 
         let manualCount = allReadings.filter({ $0.isManual }).count
         #expect(manualCount == 1)
@@ -178,9 +187,9 @@ class BundleReference {}
         #expect(allCarbEntries.count == 8)
         #expect(allCarbEntries.first?.carbs == 10)
         #expect(allCarbEntries.first?.note == "Snack 🍪")
-        #expect(allCarbEntries.first?.date == Date("2025-04-28T18:36:06.968Z"))
+        #expect(sameInstant(allCarbEntries.first?.date, Date("2025-04-28T18:36:06.968Z")!))
         #expect(allCarbEntries.last?.carbs == 25)
-        #expect(allCarbEntries.last?.date == Date("2025-04-28T05:03:43.332Z"))
+        #expect(sameInstant(allCarbEntries.last?.date, Date("2025-04-28T05:03:43.332Z")!))
     }
 
     @Test("Skip importing old carb entries") func testSkipImportOldCarbEntries() async throws {
@@ -219,8 +228,8 @@ class BundleReference {}
 
         let determination = determinations.first!
 
-        #expect(determination.deliverAt == Date("2025-04-28T19:41:43.564Z"))
-        #expect(determination.timestamp == Date("2025-04-28T19:41:48.453Z"))
+        #expect(sameInstant(determination.deliverAt, Date("2025-04-28T19:41:43.564Z")!))
+        #expect(sameInstant(determination.timestamp, Date("2025-04-28T19:41:48.453Z")!))
         #expect(determination.enacted == true)
         #expect(determination.reason?.starts(with: "Autosens ratio: 0.99") == true)
         #expect(determination.insulinReq == Decimal(string: "0.29"))
@@ -303,8 +312,8 @@ class BundleReference {}
         let suggested = determinations.first(where: { !$0.enacted && $0.deliverAt == $0.timestamp })!
         let enacted = determinations.first(where: { $0.enacted })!
 
-        #expect(suggested.deliverAt == Date("2025-04-28T19:51:48.453Z"))
-        #expect(enacted.timestamp == Date("2025-04-28T19:41:48.453Z"))
+        #expect(sameInstant(suggested.deliverAt, Date("2025-04-28T19:51:48.453Z")!))
+        #expect(sameInstant(enacted.timestamp, Date("2025-04-28T19:41:48.453Z")!))
     }
 }
 

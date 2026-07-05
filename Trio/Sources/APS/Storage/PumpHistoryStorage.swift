@@ -40,7 +40,11 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
 
     private func roundDose(_ dose: Double, toIncrement increment: Double) -> Decimal {
         let roundedValue = (dose / increment).rounded() * increment
-        return Decimal(roundedValue)
+        // `Decimal(_ double:)` captures the full binary-float representation (e.g. 0.05 * 6 →
+        // 0.30000000000000004 → 0.3000…512), which then round-trips through GRDB's lossless TEXT storage
+        // and breaks exact-value comparisons. Round to 4 places to strip the float artifact while keeping
+        // every real insulin increment (0.1 / 0.05 / 0.025 / 0.01) intact.
+        return Decimal(roundedValue).rounded(toPlaces: 4)
     }
 
     func storePumpEvents(_ events: [NewPumpEvent]) async throws {

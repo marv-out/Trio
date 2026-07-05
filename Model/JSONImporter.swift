@@ -114,9 +114,15 @@ class JSONImporter {
         // Glucose lives in GRDB; dedupe against the dates already stored in the import window.
         let existingDates = try await GlucoseStore.existingDates(from: twentyFourHoursAgo, to: now, pool: pool)
 
-        // only import glucose values from the last 24 hours that don't exist
-        let glucoseHistory = glucoseHistoryFull
-            .filter { $0.dateString >= twentyFourHoursAgo && $0.dateString <= now && !existingDates.contains($0.dateString) }
+        // Only import glucose values from the last 24 hours that don't already exist. Match by proximity
+        // (≤ 1 s), not exact equality: GRDB stores dates at millisecond precision, but the JSON timestamps
+        // carry sub-millisecond components (e.g. epoch `…726.578`), so a re-imported reading would never
+        // exactly equal its round-tripped value and would be duplicated (Step 11 precision lesson). Glucose
+        // readings are minutes apart, so a 1 s window cannot merge two distinct readings.
+        let glucoseHistory = glucoseHistoryFull.filter { reading in
+            guard reading.dateString >= twentyFourHoursAgo, reading.dateString <= now else { return false }
+            return !existingDates.contains { abs($0.timeIntervalSince(reading.dateString)) <= 1 }
+        }
 
         let records = try glucoseHistory.map { try $0.makeGlucoseRecord() }
         try await GlucoseStore.batchInsert(records, pool: pool)
@@ -192,9 +198,16 @@ class JSONImporter {
         let twentyFourHoursAgo = now - 24.hours.timeInterval
         let pumpHistoryRaw: [PumpHistoryEvent] = try readJsonFile(url: url)
         // Pump events live in GRDB; dedupe against the timestamps already stored in the import window.
+        // Match by proximity (≤ 1 s), not exact equality: GRDB stores timestamps at millisecond precision,
+        // but the JSON timestamps carry sub-millisecond components, so a re-imported event would never
+        // exactly equal its round-tripped value — it would then hit the `(timestamp, type)` composite
+        // unique index and abort the insert (Step 11 precision lesson).
         let existingTimestamps = try await PumpEventStore.existingTimestamps(from: twentyFourHoursAgo, to: now, pool: pool)
         let pumpHistoryFiltered = pumpHistoryRaw
-            .filter { $0.timestamp >= twentyFourHoursAgo && $0.timestamp <= now && !existingTimestamps.contains($0.timestamp) }
+            .filter { event in
+                guard event.timestamp >= twentyFourHoursAgo, event.timestamp <= now else { return false }
+                return !existingTimestamps.contains { abs($0.timeIntervalSince(event.timestamp)) <= 1 }
+            }
 
         let pumpHistory = try combineTempBasalAndDuration(pumpHistory: pumpHistoryFiltered)
         try checkForInconsistencies(pumpHistory: pumpHistory)
@@ -225,13 +238,20 @@ class JSONImporter {
         // Carbs live in GRDB; dedupe against the dates already stored in the import window.
         let existingDates = try await CarbEntryStore.existingDates(from: twentyFourHoursAgo, to: now, pool: pool)
 
-        // Only import carb entries from the last 24 hours that do not exist yet in GRDB
+        // Only import carb entries from the last 24 hours that do not exist yet in GRDB. Match by
+        // proximity (≤ 1 s), not exact equality: GRDB stores dates at millisecond precision, but the JSON
+        // timestamps carry sub-millisecond components, so a re-imported entry would never exactly equal
+        // its round-tripped value and would be duplicated (Step 11 precision lesson). Carb entries are
+        // seconds-to-minutes apart in practice, so a 1 s window will not merge distinct entries.
         // Only import "true" carb entries; ignore all FPU entries (aka carb equivalents)
         let carbHistory = carbHistoryFull
-            .filter {
-                let dateToCheck = $0.actualDate ?? $0.createdAt
-                return dateToCheck >= twentyFourHoursAgo && dateToCheck <= now && !existingDates.contains(dateToCheck) && $0
-                    .isFPU ?? false == false }
+            .filter { entry in
+                let dateToCheck = entry.actualDate ?? entry.createdAt
+                guard dateToCheck >= twentyFourHoursAgo, dateToCheck <= now, entry.isFPU ?? false == false else {
+                    return false
+                }
+                return !existingDates.contains { abs($0.timeIntervalSince(dateToCheck)) <= 1 }
+            }
 
         let records = try carbHistory.map { try $0.makeCarbEntryRecord() }
         try await CarbEntryStore.batchInsert(records, pool: pool)
@@ -256,9 +276,13 @@ class JSONImporter {
         // Determinations live in GRDB; dedupe against the `deliverAt` dates already stored in the window.
         let existingDates = try await OrefDeterminationStore.existingDates(from: twentyFourHoursAgo, to: now, pool: pool)
 
-        /// Helper function to check if entries are from within the last 24 hours that do not yet exist in GRDB
+        /// Helper function to check if entries are from within the last 24 hours that do not yet exist in
+        /// GRDB. Existence is matched by proximity (≤ 1 s), not exact equality: GRDB stores `deliverAt` at
+        /// millisecond precision, but the JSON timestamps carry sub-millisecond components, so a
+        /// re-imported determination would never exactly equal its round-tripped value and would be
+        /// duplicated (Step 11 precision lesson). Determinations are ~5 min apart, so a 1 s window is safe.
         func checkDeterminationDate(_ date: Date) -> Bool {
-            date >= twentyFourHoursAgo && date <= now && !existingDates.contains(date)
+            date >= twentyFourHoursAgo && date <= now && !existingDates.contains { abs($0.timeIntervalSince(date)) <= 1 }
         }
 
         guard let enactedDeliverAt = enactedDetermination.deliverAt,
