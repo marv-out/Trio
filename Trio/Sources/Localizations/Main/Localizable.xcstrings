@@ -5599,6 +5599,7 @@
       }
     },
     "·" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -6722,6 +6723,9 @@
         }
       }
     },
+    "(Snoozed)" : {
+      "comment" : "(Snoozed)"
+    },
     "(𝒳 / 60) × current basal rate" : {
       "localizations" : {
         "bg" : {
@@ -7608,7 +7612,7 @@
       }
     },
     "%@" : {
-      "comment" : "Info message",
+      "comment" : "Info message\nunits",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -9024,6 +9028,7 @@
     },
     "%@ Device Alerts" : {
       "comment" : "Device Alerts help sheet label; text reads: '<severity level> Device Alerts'.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -10285,6 +10290,7 @@
     },
     "%dh ago" : {
       "comment" : "A time ago string, in the format \"X hours ago\".",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -10410,6 +10416,7 @@
     },
     "%dm ago" : {
       "comment" : "A relative timestamp, in minutes, for an alert.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -10535,6 +10542,7 @@
     },
     "%ds ago" : {
       "comment" : "A relative timestamp, in seconds, for a past event.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -22082,6 +22090,9 @@
         }
       }
     },
+    "1 hour" : {
+      "comment" : "Snooze glucose alerts for 1 hour"
+    },
     "1 U and over" : {
       "comment" : "Name to display for the \"1 U and over\" bolus display threshold option.",
       "localizations" : {
@@ -22709,6 +22720,9 @@
           }
         }
       }
+    },
+    "3 hours" : {
+      "comment" : "Snooze glucose alerts for 3 hours"
     },
     "3 M" : {
       "comment" : "Abbreviation for three months",
@@ -24219,6 +24233,9 @@
           }
         }
       }
+    },
+    "20 min" : {
+      "comment" : "Snooze glucose alerts for 20 minutes"
     },
     "24 hours" : {
       "extractionState" : "manual",
@@ -26839,6 +26856,12 @@
         }
       }
     },
+    "A notification will be triggered every time your glucose is updated in Trio." : {
+
+    },
+    "A notification will be triggered only when glucose levels are below the LOW limit or above the HIGH limit, as specified in Glucose Alarm Limits below." : {
+
+    },
     "A pre-condition to have Temp Targets adjust Sensitivity is that the respective Target Behavior settings High Temp Target Raises Sensitivity or Low Temp Target Lowers Sensitivity are set to enabled." : {
       "localizations" : {
         "bg" : {
@@ -27593,6 +27616,7 @@
     },
     "above" : {
       "comment" : "A comparison operator.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -28340,6 +28364,7 @@
     },
     "Active" : {
       "comment" : "Title of a section that allows the user to select whether or not the glucose alert is active during that time of day.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -28465,6 +28490,7 @@
     },
     "Active During" : {
       "comment" : "A section header for the active glucose alert.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -29352,6 +29378,7 @@
     },
     "Add Alarm" : {
       "comment" : "A title for a sheet that lets the user add a glucose alert.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -31226,6 +31253,9 @@
           }
         }
       }
+    },
+    "Add Glucose Source to Alarm" : {
+
     },
     "Add insulin without actually bolusing" : {
       "comment" : "Bolus screen when adding insulin",
@@ -33267,6 +33297,7 @@
       }
     },
     "Add Variant" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -35173,6 +35204,9 @@
         }
       }
     },
+    "Adjust these values if you would like the statistics to reflect different values than the internationally accepted Time In Range values used as the default." : {
+
+    },
     "Adjusting this value not only can adjust how quickly your sensitivity will respond to changing glucose readings, but also at what glucose readings you reach your Autosens Max/Min limits." : {
       "localizations" : {
         "bg" : {
@@ -36562,6 +36596,7 @@
     },
     "Alarm" : {
       "comment" : "Name of a critical-alarm sound file.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -36818,6 +36853,7 @@
     },
     "Alert Sound" : {
       "comment" : "A section header for the alert sound settings.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -37067,6 +37103,7 @@
       }
     },
     "Algorithm Error" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -41988,6 +42025,7 @@
       }
     },
     "Already set for Day & Night. Change the alarm time window to add a second alarm for the same type." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -43254,6 +43292,9 @@
         }
       }
     },
+    "Always" : {
+      "comment" : "Option to always notify on every CGM reading"
+    },
     "Always Color Glucose Value (green, yellow etc)" : {
       "comment" : "UI/UX option",
       "extractionState" : "manual",
@@ -43634,6 +43675,24 @@
         }
       }
     },
+    "Always Notify Algorithm" : {
+
+    },
+    "Always Notify Algorithm Warnings." : {
+
+    },
+    "Always Notify Carb" : {
+
+    },
+    "Always Notify Carb Warnings." : {
+
+    },
+    "Always Notify CGM" : {
+
+    },
+    "Always Notify CGM Warnings." : {
+
+    },
     "Always Notify Glucose" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -43764,6 +43823,15 @@
           }
         }
       }
+    },
+    "Always Notify Pump" : {
+
+    },
+    "Always Notify Pump Warnings." : {
+
+    },
+    "Always:" : {
+
     },
     "Ambulatory Glucose Profile (AGP)" : {
       "localizations" : {
@@ -44391,6 +44459,18 @@
           }
         }
       }
+    },
+    "An example of a Carb Warning is 'Carbs required: 30 g'" : {
+
+    },
+    "An example of a CGM Warning is 'Unable to open the app'" : {
+
+    },
+    "An example of a Pump Warning is 'Pod Expiration Reminder'" : {
+
+    },
+    "An example of an Algorithm Warning is 'Error: Invalid glucose: Not enough glucose data'" : {
+
     },
     "An external bolus of %@ U of insulin was recorded." : {
       "localizations" : {
@@ -47006,6 +47086,7 @@
       }
     },
     "Applies To (Cannot be changed)" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -48143,6 +48224,7 @@
       }
     },
     "at least" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -52403,6 +52485,7 @@
       }
     },
     "Available" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -55057,6 +55140,7 @@
       }
     },
     "Basal Profile Mismatch" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -56808,6 +56892,7 @@
       }
     },
     "Behavior" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -56933,6 +57018,7 @@
     },
     "below" : {
       "comment" : "A label describing a glucose value is below.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -57801,6 +57887,7 @@
       }
     },
     "Blood Glucose Reminder" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -58058,6 +58145,7 @@
     },
     "Bloom" : {
       "comment" : "Name of a sound file.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -58183,6 +58271,7 @@
     },
     "Bloop" : {
       "comment" : "Name of a sound file.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -60077,6 +60166,7 @@
     },
     "Bolus cancellation failed" : {
       "comment" : "Title of an alert when a bolus is not cancelled.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -60822,6 +60912,9 @@
           }
         }
       }
+    },
+    "Bolus failed or inaccurate. Check pump history before repeating." : {
+      "comment" : "Bolus failed or inaccurate. Check pump history before repeating."
     },
     "Bolus In Progress..." : {
       "localizations" : {
@@ -62850,6 +62943,7 @@
     },
     "Bright Alarm" : {
       "comment" : "Name of the sound to be played when the alarm is set to \"Bright Alarm\".",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -64371,6 +64465,7 @@
       }
     },
     "Calibration unavailable" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -68159,6 +68254,7 @@
       }
     },
     "Carbs Required" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -68529,6 +68625,9 @@
           }
         }
       }
+    },
+    "Carbs required: %d g" : {
+      "comment" : "Carbs required"
     },
     "Carbs:" : {
       "localizations" : {
@@ -70145,6 +70244,7 @@
     },
     "CGM Reconnect Required" : {
       "comment" : "Title of a Trio alert that is emitted by `APSManager` / `NotLoopingMonitor` under the `trio.aps` manager identifier.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -70270,6 +70370,7 @@
     },
     "CGM Sensor Expired" : {
       "comment" : "Title of an alert that informs the user that their CGM sensor is expired.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -70395,6 +70496,7 @@
     },
     "CGM Sensor Expires Soon" : {
       "comment" : "Title of a notification when a CGM sensor is about to expire.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -72308,6 +72410,7 @@
     },
     "Check pump history before repeating." : {
       "comment" : "Error message displayed when a bolus fails.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -72433,6 +72536,7 @@
     },
     "Chime" : {
       "comment" : "Name of a sound file.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -73176,6 +73280,9 @@
         }
       }
     },
+    "Choose glucose notifications option. See hint for more details." : {
+
+    },
     "Choose glucose reading color scheme. See hint for more details." : {
       "localizations" : {
         "bg" : {
@@ -73674,6 +73781,7 @@
     },
     "Choose Tone" : {
       "comment" : "A title for a sheet that lets the user choose an alarm tone.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -74799,6 +74907,7 @@
     },
     "Clear Chimes" : {
       "comment" : "Display name for the clear chimes alarm sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -75045,6 +75154,9 @@
           }
         }
       }
+    },
+    "Click to Snooze Alerts" : {
+
     },
     "Close" : {
       "localizations" : {
@@ -82721,6 +82833,7 @@
     },
     "Critical" : {
       "comment" : "Name of the critical alarm sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -82846,6 +82959,7 @@
     },
     "Crying" : {
       "comment" : "Name of a sound file that plays a crying sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -86870,6 +86984,7 @@
     },
     "Day & Night" : {
       "comment" : "Display name for the \"Always\" option in settings.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -86995,6 +87110,7 @@
     },
     "Day & Night Windows" : {
       "comment" : "A section of the settings screen that allows the user to set the start times for day and night.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -87119,6 +87235,7 @@
       }
     },
     "Day and Night Window" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -87244,6 +87361,7 @@
     },
     "Day and Night windows are configured globally on the Alarms screen." : {
       "comment" : "A description of how the day and night windows are configured.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -87369,6 +87487,7 @@
     },
     "Day only" : {
       "comment" : "A label describing an alarm that is set for the day only.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -87494,6 +87613,7 @@
     },
     "Day Starts" : {
       "comment" : "A label for the start of the day.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -88516,6 +88636,7 @@
       }
     },
     "Decides when each alarm's Day or Night setting applies." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -89282,6 +89403,7 @@
       }
     },
     "Default notification banner. Suppressed by Silence & Focus Mode by default." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -92526,6 +92648,7 @@
       }
     },
     "Default: Day starts %1$@, Night starts %2$@." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -95871,6 +95994,7 @@
     },
     "Delete Alarm" : {
       "comment" : "A button that deletes an alarm.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -97803,6 +97927,7 @@
       }
     },
     "Delete Variant" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -99447,6 +99572,7 @@
     },
     "Device Alarms" : {
       "comment" : "A title for a screen that displays a list of device alarms.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -99696,6 +99822,7 @@
       }
     },
     "Device Expiration Reminder" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -99820,6 +99947,7 @@
       }
     },
     "Device Expired" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -99944,6 +100072,7 @@
       }
     },
     "Device Shutdown Imminent" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -100946,6 +101075,7 @@
     },
     "Dings" : {
       "comment" : "Name of a sound file.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -101954,6 +102084,9 @@
           }
         }
       }
+    },
+    "Disabled:" : {
+
     },
     "Disables SMBs if last two glucose values differ by more than this percent." : {
       "localizations" : {
@@ -128223,6 +128356,7 @@
       }
     },
     "Fires when glucose drops to or below a low threshold." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -128347,6 +128481,7 @@
       }
     },
     "Fires when glucose drops to or below an urgent low threshold." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -128471,6 +128606,7 @@
       }
     },
     "Fires when glucose is at or above this value." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -128595,6 +128731,7 @@
       }
     },
     "Fires when glucose is at or below this value." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -128719,6 +128856,7 @@
       }
     },
     "Fires when glucose is forecasted to be low within the next 20 minutes." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -128843,6 +128981,7 @@
       }
     },
     "Fires when glucose rises to or above a high threshold." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -128967,6 +129106,7 @@
       }
     },
     "Fires when oref recommends eating carbs to avoid a low." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -129091,6 +129231,7 @@
       }
     },
     "Fires when the algorithm suggests to eat at least this many grams of carbs to avoid a low." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -129216,6 +129357,7 @@
     },
     "Fires when the forecast at +20 minutes (blended across all available prediction curves) is at or below this value." : {
       "comment" : "Text displayed in a section header for a glucose alert that fires when the forecast at +20 minutes (blended across all available prediction curves) is at or below the specified threshold.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -130464,6 +130606,7 @@
       }
     },
     "For everyday heads-up notifications. These behave like a standard banner — they stay quiet when your phone is silenced or a Focus is on. Examples: an algorithm error, a sensor expiration reminder, or a time-zone change being detected." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -131090,6 +131233,7 @@
       }
     },
     "For situations that require prompt attention. These break through Silent Mode, Do Not Disturb, and any Focus you have enabled. Examples: a pump fault, an occlusion, or Trio not looping for too long. Heads up: if your build of Trio has Apple's Critical Alerts entitlement, iOS plays its own critical alert sound and the sound you picked for this alert category is ignored." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -131214,6 +131358,7 @@
       }
     },
     "For things you should know about soon, but not 'act right now'. These can break through banner suppression on the lock screen, but they still obey Silent Mode and Focus by default. Examples: reservoir running low, pod or patch expiring soon, or glucose data going stale." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -133734,7 +133879,7 @@
       }
     },
     "g" : {
-      "comment" : "Abbreviation for grams\nGram abbreviation\nThe short unit display string for grams\nUnits for carbs\ngram of carbs",
+      "comment" : "Gram abbreviation\nThe short unit display string for grams\nUnits for carbs\ngram of carbs",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -134614,6 +134759,7 @@
     },
     "General" : {
       "comment" : "A section of the glucose alert editor that contains the name and enable toggle.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -135613,7 +135759,7 @@
       }
     },
     "Glucose" : {
-      "comment" : "History Mode\nTitle for glucose-related statistics",
+      "comment" : "Glucose\nHistory Mode\nTitle for glucose-related statistics",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -135738,6 +135884,7 @@
       }
     },
     "Glucose %1$@." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -135863,6 +136010,7 @@
     },
     "Glucose Alarms" : {
       "comment" : "The title of the glucose alarms screen.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -136112,6 +136260,7 @@
       }
     },
     "Glucose App Badge" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -136857,6 +137006,7 @@
     },
     "Glucose Data Stale" : {
       "comment" : "Title of an alert that indicates that glucose data is stale.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -137485,6 +137635,7 @@
       }
     },
     "Glucose Error" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -137733,6 +137884,7 @@
       }
     },
     "Glucose is stale for calibration" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -138234,6 +138386,9 @@
           }
         }
       }
+    },
+    "Glucose Notifications" : {
+
     },
     "Glucose out of range: %@." : {
       "localizations" : {
@@ -141765,6 +141920,7 @@
       }
     },
     "Handled by CGM App" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -144183,6 +144339,7 @@
     },
     "High Chimes" : {
       "comment" : "Display name for the high_chimes.caf alarm sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -144553,6 +144710,12 @@
           }
         }
       }
+    },
+    "High Glucose Alarm active" : {
+      "comment" : "High Glucose Alarm active"
+    },
+    "High Glucose Alarm Limit" : {
+
     },
     "High Glucose Target" : {
       "localizations" : {
@@ -146071,6 +146234,7 @@
     },
     "Honk" : {
       "comment" : "Display name for the honk alarm sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -148835,6 +148999,9 @@
         }
       }
     },
+    "If iOS Trio Notifications is disabled, Trio will display these messages in-app as a banner only." : {
+
+    },
     "If shown, Logarithmic Dynamic ISF is enabled." : {
       "localizations" : {
         "bg" : {
@@ -150328,6 +150495,9 @@
           }
         }
       }
+    },
+    "If your CGM readings are below the Low value or above the High value, you will receive a glucose alarm." : {
+
     },
     "If your current basal rate is 0.8 U/hr and \"Super Bolus Percentage\" is set to 200%: 0.8 × (200 / 100) = 1.6 units will be added to your bolus recommendation." : {
       "localizations" : {
@@ -154116,7 +154286,7 @@
       }
     },
     "Info" : {
-      "comment" : "Info icon in main view",
+      "comment" : "Info icon in main view\nInfo title",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -154877,6 +155047,7 @@
       }
     },
     "Insulin Limit Reached" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -155001,6 +155172,7 @@
       }
     },
     "Insulin Limit Warning" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -156009,6 +156181,7 @@
       }
     },
     "Insulin Resume Reminder" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -157534,6 +157707,9 @@
           }
         }
       }
+    },
+    "Invalid Pump State" : {
+
     },
     "Invalid Pump State (%@)." : {
       "localizations" : {
@@ -169470,6 +169646,9 @@
         }
       }
     },
+    "Low and High Glucose Alarm Limits" : {
+
+    },
     "Low and High Thresholds" : {
       "localizations" : {
         "bg" : {
@@ -169850,7 +170029,14 @@
         }
       }
     },
+    "Low Glucose Alarm active" : {
+      "comment" : "Low Glucose Alarm active"
+    },
+    "Low Glucose Alarm Limit" : {
+
+    },
     "Low Glucose Soon" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -172622,6 +172808,7 @@
       }
     },
     "Manual Temp Basal Active" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -182550,6 +182737,7 @@
     },
     "Minimal" : {
       "comment" : "Display name for the minimal alarm sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -185093,6 +185281,7 @@
     },
     "Mood Synth" : {
       "comment" : "Display name for the \"Mood Synth\" alarm sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -185472,6 +185661,7 @@
       }
     },
     "Mute Trio Alarms" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -186730,6 +186920,7 @@
     },
     "Night only" : {
       "comment" : "A label for \"Night only\".",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -186855,6 +187046,7 @@
     },
     "Night Starts" : {
       "comment" : "A label for the night start time picker.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -187481,6 +187673,9 @@
           }
         }
       }
+    },
+    "Nightscout ping: %d ms" : {
+      "comment" : "Nightscout ping"
     },
     "Nightscout use is entirely optional. You can also setup Nightscout at a later time." : {
       "localizations" : {
@@ -188738,6 +188933,9 @@
         }
       }
     },
+    "No Glucose Alarm active" : {
+      "comment" : "No Glucose Alarm active"
+    },
     "No Glucose Data" : {
       "localizations" : {
         "bg" : {
@@ -189109,6 +189307,9 @@
           }
         }
       }
+    },
+    "No Glucose Notifications will be triggered." : {
+
     },
     "No glucose readings found." : {
       "localizations" : {
@@ -191382,6 +191583,7 @@
       }
     },
     "No URL available" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -193535,6 +193737,9 @@
           }
         }
       }
+    },
+    "not snoozing" : {
+      "comment" : "not snoozing"
     },
     "Note" : {
       "comment" : "Food Type / Meal Note",
@@ -197164,6 +197369,7 @@
     },
     "now" : {
       "comment" : "A suffix for \"Trio now\".",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -197925,6 +198131,7 @@
       }
     },
     "Occlusion" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -199546,6 +199753,12 @@
         }
       }
     },
+    "Only Alarm Limits" : {
+      "comment" : "Option to notify only when glucose reaches alarm limits"
+    },
+    "Only Alarm Limits:" : {
+
+    },
     "Only Autotune Basal Insulin" : {
       "comment" : "Autotune config",
       "extractionState" : "manual",
@@ -200051,6 +200264,7 @@
       }
     },
     "Open failed" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -201701,6 +201915,7 @@
       }
     },
     "Other Notifications" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -203335,6 +203550,7 @@
       }
     },
     "Override Silence & Focus Mode" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -204095,6 +204311,7 @@
       }
     },
     "Overrides Focus" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -204219,6 +204436,7 @@
       }
     },
     "Overrides Silence & Focus Mode. For situations requiring immediate attention." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -205101,6 +205319,7 @@
       }
     },
     "Pairing Failed" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -207898,6 +208117,7 @@
       }
     },
     "Pick a duration to mute every Trio alarm. Critical alerts (e.g. occlusion, urgent low) still pierce the snooze." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -208146,6 +208366,7 @@
       }
     },
     "Pierces banner suppression but obeys Silence & Focus Mode by default." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -208270,6 +208491,7 @@
       }
     },
     "Play Sound" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -213441,6 +213663,7 @@
       }
     },
     "Pump Battery Empty" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -213565,6 +213788,7 @@
       }
     },
     "Pump Battery Low" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -213819,6 +214043,9 @@
         }
       }
     },
+    "Pump did not respond in time" : {
+
+    },
     "Pump Error" : {
       "localizations" : {
         "bg" : {
@@ -214068,6 +214295,7 @@
       }
     },
     "Pump Fault" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -215455,6 +215683,7 @@
       }
     },
     "Pump State Error" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -219579,6 +219808,7 @@
       }
     },
     "Recommended to always override silence and Focus mode." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -221569,6 +221799,7 @@
     },
     "Replace CGM Sensor" : {
       "comment" : "Title of an alert that instructs the user to replace a CGM sensor.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -222066,6 +222297,7 @@
       }
     },
     "Reservoir Empty" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -222314,6 +222546,7 @@
       }
     },
     "Reservoir Low" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -224457,6 +224690,7 @@
       }
     },
     "RileyLink Battery Low" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -234573,7 +234807,11 @@
         }
       }
     },
+    "Set low and high glucose values for the main screen, watch app and live activity glucose graph." : {
+
+    },
     "Set low and high glucose values for the main screen, watch app, live activity, and contact image colors." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -235085,6 +235323,9 @@
         }
       }
     },
+    "Set the Glucose Notifications Option. Descriptions for each option found below." : {
+
+    },
     "Set the value enableSMB_high_bg will compare against to enable SMB. If BG > than this value, SMBs should enable." : {
       "comment" : "... When Blood Glucose Is Over (mg/dl):",
       "extractionState" : "manual",
@@ -235348,6 +235589,9 @@
           }
         }
       }
+    },
+    "Sets the lower and upper limit for glucose alarms." : {
+
     },
     "Sets Trio's appearance. Descriptions of each option found below." : {
       "localizations" : {
@@ -236108,6 +236352,7 @@
       }
     },
     "Setup Incomplete" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -243247,6 +243492,7 @@
       }
     },
     "Snooze" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -243371,6 +243617,7 @@
       }
     },
     "Snooze (15 min)" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -243496,6 +243743,7 @@
     },
     "Snooze 1 hr" : {
       "comment" : "Snooze glucose alerts for 1 hour",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -243621,6 +243869,7 @@
     },
     "Snooze 3 hrs" : {
       "comment" : "Snooze glucose alerts for 3 hours",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -243746,6 +243995,7 @@
     },
     "Snooze 6 hrs" : {
       "comment" : "Snooze glucose alerts for 6 hours",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -243871,6 +244121,7 @@
     },
     "Snooze 15 min" : {
       "comment" : "Snooze glucose alerts for 15 minutes",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -244119,6 +244370,7 @@
       }
     },
     "Snooze all (15 min)" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -244243,6 +244495,7 @@
       }
     },
     "Snooze All Alarms" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -244498,6 +244751,7 @@
       }
     },
     "Snoozed until %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -244620,6 +244874,9 @@
           }
         }
       }
+    },
+    "snoozing until %@" : {
+      "comment" : "snoozing until %@"
     },
     "Some helpful reminders:" : {
       "localizations" : {
@@ -245249,6 +245506,7 @@
       }
     },
     "Sound off" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -245373,6 +245631,7 @@
       }
     },
     "Sound on" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -245495,6 +245754,9 @@
           }
         }
       }
+    },
+    "Source of the glucose reading will be added to the notification." : {
+
     },
     "Split" : {
       "localizations" : {
@@ -245746,6 +246008,7 @@
     },
     "Spring" : {
       "comment" : "Name of a sound effect.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -250274,6 +250537,9 @@
         }
       }
     },
+    "Strength" : {
+
+    },
     "Style" : {
       "localizations" : {
         "bg" : {
@@ -252150,6 +252416,7 @@
       }
     },
     "Suspend In Progress" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -253400,6 +253667,7 @@
     },
     "Synth" : {
       "comment" : "Display name for the synth alarm sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -258437,6 +258705,7 @@
       }
     },
     "The app Garmin Connect must be installed to use Trio.\nGo to the App Store to download it." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -262180,6 +262449,7 @@
       }
     },
     "The Night window runs from 'Night Starts' back around to 'Day Starts' — so by default, Night covers %1$@ through %2$@ the next morning." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -263799,6 +264069,9 @@
         }
       }
     },
+    "The source of the glucose reading will be added to the notification." : {
+
+    },
     "The time it takes to complete one full cycle from high to low and back to high." : {
       "localizations" : {
         "bg" : {
@@ -264924,6 +265197,7 @@
       }
     },
     "These alarms are silenced because the %@ app handles CGM alerts. To have Trio notify you instead, turn off \"Use CGM App Alerts\" below." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -265048,6 +265322,7 @@
       }
     },
     "These alarms are silenced because the CGM app handles them. To have Trio notify you instead, turn off \"Use CGM App Alerts\" below." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -265172,6 +265447,7 @@
       }
     },
     "These thresholds drive the chart band colors, statistics in-range buckets, Live Activity colors, and Contact Image colors." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -265295,7 +265571,11 @@
         }
       }
     },
+    "These two settings determine the range outside of which you will be notified via push notifications." : {
+
+    },
     "These two times define the Day and Night windows. Each alarm's Active setting picks one — Day & Night, Day only, or Night only — and only fires when that window is current." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -265421,6 +265701,7 @@
     },
     "These windows are shared between Glucose Alarms and Device Alarms." : {
       "comment" : "A description of how the day and night windows are shared between glucose and device alarms.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -275110,6 +275391,7 @@
       }
     },
     "Time-Sensitive" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -276598,6 +276880,7 @@
       }
     },
     "To configure when alarms fire (urgent low / low / high / forecasted low), open Glucose Alarms." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -278343,6 +278626,7 @@
     },
     "Tone" : {
       "comment" : "A label displayed in a list item.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -280249,6 +280533,9 @@
         }
       }
     },
+    "Transmitter: %@%%" : {
+      "comment" : "Transmitter: %@%%"
+    },
     "Treatments" : {
       "comment" : "History Mode",
       "localizations" : {
@@ -280630,6 +280917,7 @@
     },
     "Trill" : {
       "comment" : "Name of a sound file.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -281747,6 +282035,7 @@
     },
     "Trio could not communicate with the pump. Check the pump and try again." : {
       "comment" : "Error message displayed when the pump is not responding.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -283234,6 +283523,9 @@
         }
       }
     },
+    "Trio Information Notifications" : {
+
+    },
     "Trio is a powerful app that helps you manage your diabetes. Let's get started by setting up a few important parameters that will help Trio work effectively for you." : {
       "localizations" : {
         "bg" : {
@@ -284229,6 +284521,7 @@
     },
     "Trio Not Looping" : {
       "comment" : "Title of an alert that Trio emits when it detects that the algorithm is not looping.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -286592,6 +286885,7 @@
     },
     "Try again." : {
       "comment" : "Error message displayed when a bolus cancellation fails.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -288469,6 +288763,7 @@
       }
     },
     "Unable to open the app" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -289105,6 +289400,7 @@
       }
     },
     "Unavailable" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -292620,6 +292916,7 @@
     },
     "Urgent Low" : {
       "comment" : "Display name for the urgent low alarm sound.",
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -292744,6 +293041,7 @@
       }
     },
     "Urgent Low Glucose" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -292868,6 +293166,7 @@
       }
     },
     "Urgent Low Threshold" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -293627,6 +293926,7 @@
       }
     },
     "Use CGM App Alerts" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -296410,6 +296710,9 @@
         }
       }
     },
+    "Various Glucose Notifications" : {
+
+    },
     "Very High (>%@)" : {
       "localizations" : {
         "bg" : {
@@ -297535,6 +297838,9 @@
           }
         }
       }
+    },
+    "Warning" : {
+      "comment" : "Warning title"
     },
     "Warning when bolusing with a very low or forecasted very low glucose." : {
       "localizations" : {
@@ -305050,6 +305356,7 @@
       }
     },
     "Window Boundaries" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -305172,6 +305479,18 @@
           }
         }
       }
+    },
+    "With iOS Trio Notifications enabled, you can let Trio display most Algorithm Notifications in iOS Notification Center as a Banner, List and on the Lock Screen. It allows you to refer to Trio Information at a glance and troubleshoot any informational issue. Set iOS Notifications Banner Style to Persistent to display banners in the app until dismissed." : {
+
+    },
+    "With iOS Trio Notifications enabled, you can let Trio display most Carb Notifications in iOS Notification Center as a Banner, List and on the Lock Screen. It allows you to refer to Trio Information at a glance and troubleshoot any informational issue. Set iOS Notifications Banner Style to Persistent to display banners in the app until dismissed." : {
+
+    },
+    "With iOS Trio Notifications enabled, you can let Trio display most CGM Notifications in iOS Notification Center as a Banner, List and on the Lock Screen. It allows you to refer to Trio Information at a glance and troubleshoot any informational issue. Set iOS Notifications Banner Style to Persistent to display banners in the app until dismissed." : {
+
+    },
+    "With iOS Trio Notifications enabled, you can let Trio display most Pump Notifications in iOS Notification Center as a Banner, List and on the Lock Screen. It allows you to refer to Trio Information at a glance and troubleshoot any informational issue. Set iOS Notifications Banner Style to Persistent to display banners in the app until dismissed." : {
+
     },
     "With Live Activities enabled, Trio displays your choice of the following current data on your iPhone's Lock Screen and in the Dynamic Island:" : {
       "localizations" : {
@@ -307918,6 +308237,7 @@
       }
     },
     "Your CGM app handles alerts (Dexcom G6 / One, G7 / One+, or xDrip4iOS). Turn off to let Trio alert you." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -308042,6 +308362,7 @@
       }
     },
     "Your CGM has no companion app, so Trio handles alarms." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -308422,6 +308743,7 @@
       }
     },
     "Your glucose may go below %2$@ in %1$d min." : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
