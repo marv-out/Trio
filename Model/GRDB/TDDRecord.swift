@@ -101,10 +101,15 @@ enum TDDStore {
     }
 
     /// (sum of total, number of entries) since `date`. Mirrors the old `aggregateTDD`.
+    ///
+    /// The Decimal sum stays in Swift on purpose: `total` is stored as TEXT (lossless), and a SQL
+    /// `SUM(CAST(total AS REAL))` would reintroduce binary-float rounding. Only the `total` column is
+    /// selected, so the windowed read stays small.
     static func aggregate(since date: Date) async throws -> (total: Decimal, count: Int) {
         try await pool.read { db in
             let totals = try TDDRecord
                 .filter(TDDRecord.Columns.date >= date)
+                .select(TDDRecord.Columns.total)
                 .fetchAll(db)
                 .compactMap(\.total)
             return (totals.reduce(0, +), totals.count)
@@ -113,25 +118,31 @@ enum TDDStore {
 
     /// Number of entries with `total > 0` since `date`. Mirrors `hasSufficientTDD`'s count.
     /// `pool` defaults to the shared store; tests pass an in-memory pool.
+    ///
+    /// Counts in SQL (`COUNT(*)` with a `CAST(total AS REAL) > 0` predicate) rather than loading every
+    /// windowed row and filtering in Swift — this runs every loop cycle (via `hasSufficientTDD`), and a
+    /// count needs no Decimal precision. `CAST(NULL AS REAL)` is NULL (excluded), matching `(total ?? 0) > 0`.
     static func countWithPositiveTotal(since date: Date, pool: DatabasePool? = nil) async throws -> Int {
         try await (pool ?? Self.pool).read { db in
             try TDDRecord
                 .filter(TDDRecord.Columns.date > date)
-                .fetchAll(db)
-                .filter { ($0.total ?? 0) > 0 }
-                .count
+                .filter(sql: "CAST(total AS REAL) > 0")
+                .fetchCount(db)
         }
     }
 
     /// Entries since `date`, oldest first. `positiveTotalOnly` mirrors the `total > 0` predicate
-    /// used by OpenAPS' oref variables. Used by OpenAPS and the Stat TDD chart.
+    /// used by OpenAPS' oref variables. Used by OpenAPS and the Stat TDD chart. The `total > 0` filter
+    /// runs in SQL so fewer rows are materialized when it is set.
     static func entries(since date: Date, positiveTotalOnly: Bool = false) async throws -> [TDDRecord] {
         try await pool.read { db in
-            let rows = try TDDRecord
+            var request = TDDRecord
                 .filter(TDDRecord.Columns.date > date)
                 .order(TDDRecord.Columns.date)
-                .fetchAll(db)
-            return positiveTotalOnly ? rows.filter { ($0.total ?? 0) > 0 } : rows
+            if positiveTotalOnly {
+                request = request.filter(sql: "CAST(total AS REAL) > 0")
+            }
+            return try request.fetchAll(db)
         }
     }
 

@@ -466,6 +466,8 @@ enum CarbEntryStore {
         let observation = ValueObservation.tracking { db in
             try CarbEntryRecord.filter(column == false).fetchCount(db)
         }
-        return observation.publisher(in: pool).eraseToAnyPublisher()
+        // Only emit on an actual count change so a write that leaves the not-yet-uploaded set unchanged
+        // does not re-trigger an upload.
+        return observation.publisher(in: pool).removeDuplicates().eraseToAnyPublisher()
     }
 }

@@ -554,14 +554,26 @@ enum OrefDeterminationStore {
     /// Emits the latest determination (any state) on every change — replaces the six
     /// `coreDataPublisher.filteredByEntityName("OrefDetermination")` sinks (IOB, LiveActivity, Watch,
     /// Garmin, Calendar, ContactImage) that fire on *any* new determination, not just enacted ones.
-    static func observeLatest() -> AnyPublisher<OrefDeterminationRecord?, Error> {
+    ///
+    /// This has six long-lived subscribers, so it is a **single shared** observation rather than one
+    /// per caller. A `CurrentValueSubject`-backed multicast gives replay-1 semantics: a late subscriber
+    /// (e.g. `IOBService`) immediately receives the current determination instead of waiting for the
+    /// next loop cycle — the trap a plain `.share()` would introduce. `.autoconnect()` starts the
+    /// observation on the first subscriber; the subscribers are app-lifetime singletons, so the
+    /// reference count never drops back to zero and the connection is never torn down.
+    static func observeLatest() -> AnyPublisher<OrefDeterminationRecord?, Error> { sharedLatest }
+
+    private static let sharedLatest: AnyPublisher<OrefDeterminationRecord?, Error> = {
         let observation = ValueObservation.tracking { db in
             try OrefDeterminationRecord
                 .order(OrefDeterminationRecord.Columns.deliverAt.desc)
                 .fetchOne(db)
         }
-        return observation.publisher(in: pool).eraseToAnyPublisher()
-    }
+        return observation.publisher(in: pool)
+            .multicast(subject: CurrentValueSubject<OrefDeterminationRecord?, Error>(nil))
+            .autoconnect()
+            .eraseToAnyPublisher()
+    }()
 
     /// Reactive feed of recent determinations (newest first) — replaces the Home
     /// `determinationController` FRC (COB/IOB charts). Tracks the newest 500 rows (a deterministic,
@@ -584,7 +596,9 @@ enum OrefDeterminationStore {
                 .filter(OrefDeterminationRecord.Columns.isUploadedToNS == false)
                 .fetchCount(db)
         }
-        return observation.publisher(in: pool).eraseToAnyPublisher()
+        // Only emit on an actual count change so an unrelated determination write does not re-trigger
+        // an upload.
+        return observation.publisher(in: pool).removeDuplicates().eraseToAnyPublisher()
     }
 }
 

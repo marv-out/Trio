@@ -466,7 +466,8 @@ enum OverrideStore {
                 .filter(OverrideRecord.Columns.isUploadedToNS == false)
                 .fetchCount(db)
         }
-        return observation.publisher(in: pool).eraseToAnyPublisher()
+        // Only emit on an actual count change so an unrelated write does not re-trigger an upload.
+        return observation.publisher(in: pool).removeDuplicates().eraseToAnyPublisher()
     }
 }
 
@@ -540,7 +541,8 @@ enum OverrideRunStore {
                 .filter(OverrideRunRecord.Columns.isUploadedToNS == false)
                 .fetchCount(db)
         }
-        return observation.publisher(in: pool).eraseToAnyPublisher()
+        // Only emit on an actual count change so an unrelated write does not re-trigger an upload.
+        return observation.publisher(in: pool).removeDuplicates().eraseToAnyPublisher()
     }
 
     /// Deletes runs older than `days` (periodic cleanup, mirrors the Core Data batch delete).

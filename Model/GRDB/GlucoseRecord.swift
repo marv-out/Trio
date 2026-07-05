@@ -422,7 +422,9 @@ enum GlucoseStore {
         let observation = ValueObservation.tracking { db in
             try GlucoseRecord.filter(column == false).fetchCount(db)
         }
-        return observation.publisher(in: pool).eraseToAnyPublisher()
+        // Only emit when the count actually changes — a glucose write that doesn't alter the
+        // not-yet-uploaded set (e.g. a smoothing update) must not re-trigger an upload.
+        return observation.publisher(in: pool).removeDuplicates().eraseToAnyPublisher()
     }
 }
 

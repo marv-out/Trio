@@ -67,6 +67,17 @@ final class GRDBStack {
 
     private static func makePool(inMemory: Bool) throws -> DatabasePool {
         var config = Configuration()
+
+        // The DB lives in the App Group container, so extensions could in principle open it too.
+        // A busy timeout lets a connection wait for a transient lock (e.g. a concurrent writer)
+        // instead of failing immediately with SQLITE_BUSY (the default `.immediateError`).
+        config.busyMode = .timeout(5)
+
+        // Headroom for the reactive layer: several `ValueObservation`s can re-run their read
+        // concurrently on a single write (loop cycle). The default of 5 readers can serialize them;
+        // 8 gives comfortable headroom without materially increasing memory.
+        config.maximumReaderCount = 8
+
         // Keep SQL out of logs in production; flip on for local debugging.
         config.prepareDatabase { db in
             #if DEBUG

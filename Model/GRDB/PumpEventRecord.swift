@@ -683,7 +683,16 @@ enum PumpEventStore {
     /// Emits the latest non-external bolus on every change — replaces the `lastBolusController` FRC and
     /// the AppleWatch `PumpEventStored` sink. Scans the newest 100 events (a deterministic bound that
     /// always covers the 20-minute window); the subscriber applies the `timestamp >= 20min` rule.
-    static func observeLastBolus() -> AnyPublisher<PumpEventDetails?, Error> {
+    ///
+    /// Three long-lived subscribers (Home, Treatments, Apple Watch), so this is a **single shared**
+    /// observation rather than one per caller — each one otherwise re-runs the 100-row scan + child
+    /// join on every pump write. A `CurrentValueSubject`-backed multicast gives replay-1 so a late
+    /// subscriber gets the current bolus immediately (a plain `.share()` would miss the initial value).
+    /// `.autoconnect()` starts it on the first subscriber; subscribers are app-lifetime, so it is never
+    /// torn down.
+    static func observeLastBolus() -> AnyPublisher<PumpEventDetails?, Error> { sharedLastBolus }
+
+    private static let sharedLastBolus: AnyPublisher<PumpEventDetails?, Error> = {
         let observation = ValueObservation.tracking { db -> PumpEventDetails? in
             let events = try PumpEventRecord
                 .order(PumpEventRecord.Columns.timestamp.desc)
@@ -691,8 +700,11 @@ enum PumpEventStore {
                 .fetchAll(db)
             return try loadDetails(events, db).first { $0.bolus != nil && $0.bolus?.isExternal == false }
         }
-        return observation.publisher(in: pool).eraseToAnyPublisher()
-    }
+        return observation.publisher(in: pool)
+            .multicast(subject: CurrentValueSubject<PumpEventDetails?, Error>(nil))
+            .autoconnect()
+            .eraseToAnyPublisher()
+    }()
 
     /// Emits whenever the not-yet-uploaded set for `channel` changes — replaces the upload FRCs. Emits
     /// the count; the subscriber triggers an upload.
@@ -701,6 +713,8 @@ enum PumpEventStore {
         let observation = ValueObservation.tracking { db in
             try PumpEventRecord.filter(column == false).fetchCount(db)
         }
-        return observation.publisher(in: pool).eraseToAnyPublisher()
+        // Only emit when the count actually changes, so a write that leaves the not-yet-uploaded set
+        // unchanged does not re-trigger an upload.
+        return observation.publisher(in: pool).removeDuplicates().eraseToAnyPublisher()
     }
 }
