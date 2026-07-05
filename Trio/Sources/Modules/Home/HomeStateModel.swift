@@ -237,9 +237,11 @@ extension Home {
         private func registerSubscribers() {
             iobService.iobPublisher
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in
-                    guard let self = self else { return }
-                    self.currentIOB = self.iobService.currentIOB ?? 0
+                .sink { [weak self] iob in
+                    // Use the value the publisher already emitted (computed off-main in `updateIOB`).
+                    // Re-reading `iobService.currentIOB` here would do a synchronous file + GRDB read on
+                    // the main thread on every determination update.
+                    self?.currentIOB = iob ?? 0
                 }
                 .store(in: &subscriptions)
         }
