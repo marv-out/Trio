@@ -164,9 +164,8 @@ import Testing
                 id: UUID(),
                 deliverAt: date,
                 cob: 12,
-                insulinReq: Decimal(string: "1.234")!,
-                iob: Decimal(string: "-0.5")!,
-                currentTarget: 100
+                currentTarget: 100, insulinReq: Decimal(string: "1.234")!,
+                iob: Decimal(string: "-0.5")!
             ),
             pool: grdb.pool
         )
