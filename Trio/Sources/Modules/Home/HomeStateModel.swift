@@ -25,6 +25,7 @@ extension Home {
         @ObservationIgnored @Injected() var overrideStorage: OverrideStorage!
         @ObservationIgnored @Injected() var bluetoothManager: BluetoothStateManager!
         @ObservationIgnored @Injected() var iobService: IOBService!
+        @ObservationIgnored @Injected() var unlockmanager: UnlockManager!
 
         var cgmStateModel: CGMSettings.StateModel {
             CGMSettings.StateModel.shared
@@ -99,6 +100,7 @@ extension Home {
         var tempBasals: [PumpEventDetails] = []
         var suspendAndResumeEvents: [PumpEventDetails] = []
         var batteryFromPersistence: [BatteryRecord] = []
+        var bolusStatus: BolusStatus = .noBolus
         var lastPumpBolus: PumpEventDetails?
         var overrides: [OverrideRecord] = []
         var overrideRunStored: [OverrideRunRecord] = []
@@ -120,6 +122,8 @@ extension Home {
         var shouldRunDeleteOnSettingsChange = true
 
         var showCarbsRequiredBadge: Bool = true
+        var enableQuickBolus: Bool = false
+        var quickBolusHistory: [Decimal] = []
         private(set) var setupPumpType: PumpConfig.PumpType = .minimed
         var minForecast: [Int] = []
         var maxForecast: [Int] = []
@@ -251,6 +255,15 @@ extension Home {
                     self?.currentIOB = iob ?? 0
                 }
                 .store(in: &subscriptions)
+
+            // GRDB drives all Core Data-backed arrays via ValueObservation, so dev's
+            // updatePublisher sinks and coreDataPublisher-based registerHandlers() are
+            // obsolete here. Only the bolus-status subscription (consumed by HomeRootView)
+            // is carried over.
+            provider.deviceManager.bolusTrigger
+                .receive(on: DispatchQueue.main)
+                .weakAssign(to: \.bolusStatus, on: self)
+                .store(in: &subscriptions)
         }
 
         private func registerObservers() {
@@ -357,7 +370,7 @@ extension Home {
                 .map { [weak self] error in
                     self?.errorDate = error == nil ? nil : Date()
                     if let error = error {
-                        info(.default, String(describing: error), notificationText: error.localizedDescription)
+                        debug(.default, "APSManager lastError: \(String(describing: error))")
                     }
                     return error?.localizedDescription
                 }
@@ -415,6 +428,7 @@ extension Home {
             bolusDisplayThreshold = settingsManager.settings.bolusDisplayThreshold
             thresholdLines = settingsManager.settings.rulerMarks
             showCarbsRequiredBadge = settingsManager.settings.showCarbsRequiredBadge
+            enableQuickBolus = settingsManager.settings.enableQuickBolus
             forecastDisplayType = settingsManager.settings.forecastDisplayType
             isExerciseModeActive = settingsManager.preferences.exerciseMode
             highTTraisesSens = settingsManager.preferences.highTemptargetRaisesSensitivity
@@ -468,6 +482,88 @@ extension Home {
                     displayName: settingsManager.settings.cgm.displayName,
                     subtitle: settingsManager.settings.cgm.subtitle
                 )
+            }
+        }
+
+        func loadQuickBolusSuggestions() async {
+            guard enableQuickBolus else { return }
+            do {
+                // Pump events live in GRDB: fetch the 90-day window and keep manual pump
+                // boluses (non-SMB, non-external) — mirrors the former `BolusStored` predicate.
+                let events = try await PumpEventStore.fetchHistory(within: 90 * 24, limit: nil)
+                let boluses: [(amount: Decimal, timestamp: Date)] = events.compactMap { detail in
+                    guard let bolus = detail.bolus, !bolus.isSMB, !bolus.isExternal,
+                          let amount = bolus.amount, amount > 0,
+                          let timestamp = detail.timestamp else { return nil }
+                    return (amount, timestamp)
+                }
+
+                let now = Date()
+                let cal = Calendar.current
+                let nowMinute = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+                let nowDOW = cal.component(.weekday, from: now)
+                let sigma: Double = 60.0
+                let halfLife: Double = 10.0
+
+                var groups: [Decimal: Double] = [:]
+                for bolus in boluses {
+                    var roundedKey = Decimal()
+                    var tempAmount = bolus.amount
+                    NSDecimalRound(&roundedKey, &tempAmount, 2, .plain)
+
+                    let entryMinute = cal.component(.hour, from: bolus.timestamp) * 60 + cal
+                        .component(.minute, from: bolus.timestamp)
+                    let entryDOW = cal.component(.weekday, from: bolus.timestamp)
+
+                    let diff = abs(entryMinute - nowMinute)
+                    let circularDiff = Double(min(diff, 1440 - diff))
+                    let t = exp(-(circularDiff * circularDiff) / (2.0 * sigma * sigma))
+
+                    let d: Double
+                    if entryDOW == nowDOW {
+                        d = 1.0
+                    } else {
+                        let nowWeekend = nowDOW == 1 || nowDOW == 7
+                        let entryWeekend = entryDOW == 1 || entryDOW == 7
+                        d = nowWeekend == entryWeekend ? 0.7 : 0.15
+                    }
+
+                    let daysAgo = now.timeIntervalSince(bolus.timestamp) / 86400.0
+                    let r = pow(0.5, daysAgo / halfLife)
+
+                    groups[roundedKey, default: 0] += t * d * r
+                }
+
+                let suggestions: [Decimal] = groups
+                    .filter { $0.value >= 0.1 }
+                    .sorted { $0.value > $1.value }
+                    .prefix(5)
+                    .map(\.key)
+
+                await MainActor.run {
+                    quickBolusHistory = suggestions
+                }
+            } catch {
+                debug(.default, "\(DebuggingIdentifiers.failed) failed to fetch quick bolus history: \(error)")
+            }
+        }
+
+        func enactQuickBolus(amount: Decimal) async -> Bool {
+            guard amount > 0 else { return false }
+            let delivery = min(
+                Double(truncating: amount as NSDecimalNumber),
+                pumpInitialSettings.maxBolusUnits
+            )
+            do {
+                let authenticated = try await unlockmanager.unlock()
+                if authenticated {
+                    await apsManager.enactBolus(amount: delivery, isSMB: false, callback: nil)
+                    return true
+                }
+                return false
+            } catch {
+                debug(.bolusState, "Quick bolus authentication error: \(error)")
+                return false
             }
         }
 
@@ -741,6 +837,7 @@ extension Home.StateModel:
         thresholdLines = settingsManager.settings.rulerMarks
         bolusDisplayThreshold = settingsManager.settings.bolusDisplayThreshold
         showCarbsRequiredBadge = settingsManager.settings.showCarbsRequiredBadge
+        enableQuickBolus = settingsManager.settings.enableQuickBolus
         forecastDisplayType = settingsManager.settings.forecastDisplayType
         cgmAvailable = (fetchGlucoseManager.cgmGlucoseSourceType != CGMType.none)
         displayPumpStatusHighlightMessage()
