@@ -1,7 +1,9 @@
 import SwiftUI
 import UserNotifications
+import WatchKit
 
 @main struct TrioWatchApp: App {
+    @WKApplicationDelegateAdaptor(WatchAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -17,6 +19,7 @@ import UserNotifications
             if newScenePhase == .background {
                 WatchLogger.shared.info(.lifecycle, "App moved to background")
                 WatchLogger.shared.didEnterBackground()
+                WatchAppDelegate.scheduleBackgroundRefresh()
             }
         }
     }

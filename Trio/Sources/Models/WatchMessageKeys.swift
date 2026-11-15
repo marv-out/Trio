@@ -64,4 +64,9 @@ enum WatchMessageKeys {
     static let forecastConeMin = "forecastConeMin"
     static let forecastConeMax = "forecastConeMax"
     static let forecastLines = "forecastLines"
+
+    // Complication
+    static let complication = "complication"
+    static let requestComplicationUpdate = "requestComplicationUpdate"
+    static let glucoseDate = "glucoseDate"
 }

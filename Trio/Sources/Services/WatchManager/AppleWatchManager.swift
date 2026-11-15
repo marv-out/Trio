@@ -35,6 +35,10 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
     private var currentGlucoseTarget: Decimal = 100.0
     private var activeBolusAmount: Double = 0.0
 
+    /// When the last budgeted complication push went out
+    private var lastComplicationTransfer: Date?
+    private var complicationPushWorkItem: DispatchWorkItem?
+
     // Queue for handling Core Data change notifications
     private let queue = DispatchQueue(label: "BaseWatchManagerManager.queue", qos: .utility)
     private var coreDataPublisher: AnyPublisher<Set<NSManagedObjectID>, Never>?
@@ -73,8 +77,12 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             .sink { [weak self] _ in
                 guard let self = self else { return }
                 // Skip if no watch is paired or app not installed
-                guard let session = self.session, session.isPaired, session.isReachable,
-                      session.isWatchAppInstalled else { return }
+                guard let session = self.session, session.isPaired, session.isWatchAppInstalled else { return }
+                guard session.isReachable else {
+                    // The loop usually finishes within the minute; a push then carries fresh IOB and COB
+                    self.scheduleComplicationPush(after: 60)
+                    return
+                }
                 Task {
                     let state = await self.setupWatchState()
                     await self.sendDataToWatch(state)
@@ -86,6 +94,9 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             .receive(on: DispatchQueue.global(qos: .background))
             .sink { [weak self] _ in
                 guard let self = self else { return }
+                // Skip if no watch is paired or app not installed
+                guard let session = self.session, session.isPaired, session.isReachable,
+                      session.isWatchAppInstalled else { return }
                 Task {
                     let state = await self.setupWatchState()
                     await self.sendDataToWatch(state)
@@ -100,7 +111,11 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         coreDataPublisher?.filteredByEntityName("OrefDetermination").sink { [weak self] _ in
             guard let self = self else { return }
             // Skip if no watch is paired or app not installed
-            guard let session = self.session, session.isPaired, session.isReachable, session.isWatchAppInstalled else { return }
+            guard let session = self.session, session.isPaired, session.isWatchAppInstalled else { return }
+            guard session.isReachable else {
+                self.scheduleComplicationPush(after: 2)
+                return
+            }
             Task {
                 let state = await self.setupWatchState()
                 await self.sendDataToWatch(state)
@@ -173,8 +188,16 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
     /// Prepares the current state data to be sent to the Watch
     /// - Returns: WatchState containing current glucose readings and trends and determination infos for displaying cob and iob in the view
     func setupWatchState() async -> WatchState {
+        await buildWatchState(requireReachable: true)
+    }
+
+    /// Builds the state. Requiring reachability skips the Core Data work while the watch app is not
+    /// running; the complication path passes `false` because it feeds the face in exactly that situation.
+    private func buildWatchState(requireReachable: Bool) async -> WatchState {
         // Check if a watch is paired and reachable before doing expensive calculations
-        guard let session = session, session.isPaired, session.isReachable, session.isWatchAppInstalled else {
+        guard let session = session, session.isPaired, session.isWatchAppInstalled,
+              session.isReachable || !requireReachable
+        else {
             debug(.watch, "Watch state skipped: no watch paired or app not installed")
             return WatchState(date: Date())
         }
@@ -243,6 +266,7 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
                 // Assign currentGlucose and its color
                 /// Set current glucose with proper formatting
                 watchState.currentGlucose = Decimal(latestGlucose.glucose).formatted(for: self.units)
+                watchState.glucoseDate = latestGlucose.date
 
                 /// Calculate latest color
                 let hardCodedLow = Decimal(55)
@@ -532,6 +556,10 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             WatchMessageKeys.snoozeUntilDate: state.snoozeUntilDate.timeIntervalSince1970
         ]
 
+        if let glucoseDate = state.glucoseDate {
+            dictionary[WatchMessageKeys.glucoseDate] = glucoseDate.timeIntervalSince1970
+        }
+
         var forecastData: [String: Any] = [
             WatchMessageKeys.forecastConeMin: state.forecastConeMin,
             WatchMessageKeys.forecastConeMax: state.forecastConeMax,
@@ -564,6 +592,12 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         guard session.activationState == .activated else {
             debug(.watch, "Watch session not activated (state \(session.activationState.rawValue)), reactivating")
             session.activate()
+            return
+        }
+
+        // A state without a reading has nothing to show; queued, it would blank the watch and its face
+        guard state.currentGlucose != nil else {
+            debug(.watch, "Watch state without glucose not sent")
             return
         }
 
@@ -606,6 +640,59 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         }
     }
 
+    // MARK: - Complication
+
+    /// Pushes the complication values once the loop had time to finish. A later call moves the push.
+    /// Callers arrive on several queues, so the pending item is only touched on the manager's own.
+    private func scheduleComplicationPush(after delay: TimeInterval) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.complicationPushWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                Task { await self.pushComplication() }
+            }
+            self.complicationPushWorkItem = workItem
+            self.queue.asyncAfter(deadline: .now() + delay, execute: workItem)
+        }
+    }
+
+    /// Feeds the complication while the watch app is not running. A budgeted transfer wakes the watch
+    /// app right away; otherwise the values wait in the queue for its next background refresh.
+    @MainActor private func pushComplication() async {
+        guard let session = session, session.isPaired, session.isWatchAppInstalled,
+              session.activationState == .activated, session.isComplicationEnabled
+        else { return }
+        // While the watch app is open the regular message path keeps the face current
+        guard !session.isReachable else { return }
+
+        var state = await buildWatchState(requireReachable: false)
+        guard state.currentGlucose != nil else { return }
+        state.date = Date()
+        let payload = [WatchMessageKeys.complication: ComplicationTransferPolicy.payload(for: state)]
+
+        // Only the newest values matter, so earlier copies leave the queue
+        for transfer in session.outstandingUserInfoTransfers where transfer.userInfo[WatchMessageKeys.complication] != nil {
+            transfer.cancel()
+        }
+
+        if ComplicationTransferPolicy.shouldTransfer(
+            now: state.date,
+            lastTransfer: lastComplicationTransfer,
+            remainingTransfers: session.remainingComplicationUserInfoTransfers
+        ) {
+            session.transferCurrentComplicationUserInfo(payload)
+            lastComplicationTransfer = state.date
+            debug(
+                .watch,
+                "Complication push sent, \(session.remainingComplicationUserInfoTransfers) budgeted transfers left today"
+            )
+        } else {
+            session.transferUserInfo(payload)
+            debug(.watch, "Complication push queued for the watch app's next wake")
+        }
+    }
+
     // MARK: - WCSessionDelegate
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
@@ -620,6 +707,30 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         Task {
             let state = await self.setupWatchState()
             await self.sendDataToWatch(state)
+        }
+        if !session.isReachable {
+            scheduleComplicationPush(after: 5)
+        }
+    }
+
+    func session(_: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        guard message[WatchMessageKeys.requestComplicationUpdate] as? Bool == true else {
+            replyHandler([:])
+            return
+        }
+        debug(.watch, "Watch asked for complication values")
+        Task { [weak self] in
+            guard let self = self else {
+                replyHandler([:])
+                return
+            }
+            var state = await self.buildWatchState(requireReachable: false)
+            guard state.currentGlucose != nil else {
+                replyHandler([:])
+                return
+            }
+            state.date = Date()
+            replyHandler([WatchMessageKeys.complication: ComplicationTransferPolicy.payload(for: state)])
         }
     }
 
@@ -770,6 +881,11 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
             WatchLogIngest.legacyRecords(from: logs).forEach(TrioLogger.sink.accept)
         }
 
+        if userInfo[WatchMessageKeys.requestComplicationUpdate] as? Bool == true {
+            debug(.watch, "Watch asked for complication values while the phone was out of reach")
+            scheduleComplicationPush(after: 0)
+        }
+
         if let snoozeMinutes = userInfo[WatchMessageKeys.snoozeDuration] as? Int {
             info(.watch, "Watch requested alert snooze for \(snoozeMinutes) min")
             Task { @MainActor [weak self] in
@@ -787,6 +903,16 @@ final class BaseWatchManager: NSObject, WCSessionDelegate, Injectable, WatchMana
         func sessionDidBecomeInactive(_: WCSession) {}
         func sessionDidDeactivate(_ session: WCSession) {
             session.activate()
+        }
+
+        func sessionWatchStateDidChange(_ session: WCSession) {
+            debug(
+                .watch,
+                "Watch state changed: paired \(session.isPaired), app installed \(session.isWatchAppInstalled), complication enabled \(session.isComplicationEnabled)"
+            )
+            if session.isComplicationEnabled {
+                scheduleComplicationPush(after: 2)
+            }
         }
     #endif
 

@@ -5,6 +5,9 @@ import WatchConnectivity
 /// WatchState manages the communication between the Watch app and the iPhone app using WatchConnectivity.
 /// It handles glucose data synchronization and sending treatment requests (bolus, carbs) to the phone.
 @Observable final class WatchState: NSObject, WCSessionDelegate {
+    /// The one session owner; the app's views and its background tasks share it
+    static let shared = WatchState()
+
     // MARK: - Properties
 
     /// The WatchConnectivity session instance used for communication
@@ -290,18 +293,22 @@ import WatchConnectivity
         WatchLogger.shared.transferFinished(fileTransfer, error: error)
     }
 
-    /// Shared path for watch-state payloads from either delegate method.
-    /// Enforces the freshness contract in one place so the two delivery paths
+    /// Shared path for watch-state and complication payloads from either delegate method.
+    /// Enforces the freshness contract in one place so the delivery paths
     /// can't drift.
-    private func handleIncomingWatchStatePayload(_ dictionary: [String: Any]) {
-        guard let payload = dictionary[WatchMessageKeys.watchState] as? [String: Any],
-              let timestamp = payload[WatchMessageKeys.date] as? TimeInterval
+    func handleIncomingWatchStatePayload(_ dictionary: [String: Any]) {
+        guard let payload = dictionary[WatchMessageKeys.watchState] as? [String: Any] ??
+            dictionary[WatchMessageKeys.complication] as? [String: Any],
+            let timestamp = payload[WatchMessageKeys.date] as? TimeInterval
         else {
             WatchLogger.shared.warning(.data, "Watch state payload malformed, skipped")
             DispatchQueue.main.async { self.showSyncingAnimation = false }
             return
         }
         let date = Date(timeIntervalSince1970: timestamp)
+
+        // The face keeps whatever is newest, even a reading too old for the app's own screens
+        updateComplication(from: payload)
 
         // Wall-clock staleness gate. Drops the queued backlog cheaply when
         // the watch app wakes after long disuse; without it, every payload

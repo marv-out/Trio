@@ -5,6 +5,8 @@ struct WatchState: Hashable, Equatable, Sendable, Encodable, Decodable {
     var date: Date
     var currentGlucose: String?
     var currentGlucoseColorString: String?
+    /// When the newest reading was taken
+    var glucoseDate: Date?
     var trend: String?
     var delta: String?
     var glucoseValues: [WatchGlucoseObject] = []
@@ -40,6 +42,7 @@ struct WatchState: Hashable, Equatable, Sendable, Encodable, Decodable {
     static func == (lhs: WatchState, rhs: WatchState) -> Bool {
         lhs.date == rhs.date &&
             lhs.currentGlucose == rhs.currentGlucose &&
+            lhs.glucoseDate == rhs.glucoseDate &&
             lhs.trend == rhs.trend &&
             lhs.delta == rhs.delta &&
             lhs.glucoseValues.count == rhs.glucoseValues.count &&
@@ -72,6 +75,7 @@ struct WatchState: Hashable, Equatable, Sendable, Encodable, Decodable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(date)
         hasher.combine(currentGlucose)
+        hasher.combine(glucoseDate)
         hasher.combine(trend)
         hasher.combine(delta)
         for value in glucoseValues {

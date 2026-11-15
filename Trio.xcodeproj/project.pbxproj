@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0F1000000000000000000A2 /* ComplicationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F1000000000000000000A1 /* ComplicationSnapshot.swift */; };
+		C0F1000000000000000000A3 /* ComplicationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F1000000000000000000A1 /* ComplicationSnapshot.swift */; };
+		C0F1000000000000000000A5 /* WatchAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F1000000000000000000A4 /* WatchAppDelegate.swift */; };
+		C0F1000000000000000000A7 /* WatchState+Complication.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F1000000000000000000A6 /* WatchState+Complication.swift */; };
+		C0F1000000000000000000A9 /* ComplicationTransferPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F1000000000000000000A8 /* ComplicationTransferPolicy.swift */; };
+		C0F1000000000000000000B1 /* ComplicationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F1000000000000000000B0 /* ComplicationSnapshotTests.swift */; };
+		C0F1000000000000000000B3 /* ComplicationTransferPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F1000000000000000000B2 /* ComplicationTransferPolicyTests.swift */; };
 		477F2885616B2839D22FF0A4 /* PumpStatusStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C7EA1FA38A1728182C949F4 /* PumpStatusStorageTests.swift */; };
 		3A627606ABC518974CC60B55 /* PumpStatusStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E3EA2038BADFBCBC8801A4 /* PumpStatusStorage.swift */; };
 		4AB6E54D1659F6137A70BF74 /* PumpStatusStored+helper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EE4D8D4BA1BD69A89CA1C13 /* PumpStatusStored+helper.swift */; };
@@ -1252,6 +1259,15 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C0F1000000000000000000A1 /* ComplicationSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplicationSnapshot.swift; sourceTree = "<group>"; };
+		C0F1000000000000000000A4 /* WatchAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAppDelegate.swift; sourceTree = "<group>"; };
+		C0F1000000000000000000A6 /* WatchState+Complication.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WatchState+Complication.swift"; sourceTree = "<group>"; };
+		C0F1000000000000000000A8 /* ComplicationTransferPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplicationTransferPolicy.swift; sourceTree = "<group>"; };
+		C0F1000000000000000000B0 /* ComplicationSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplicationSnapshotTests.swift; sourceTree = "<group>"; };
+		C0F1000000000000000000B2 /* ComplicationTransferPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplicationTransferPolicyTests.swift; sourceTree = "<group>"; };
+		C0F1000000000000000000B4 /* TrioWatchApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TrioWatchApp.entitlements; sourceTree = "<group>"; };
+		C0F1000000000000000000B5 /* TrioWatchComplication.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TrioWatchComplication.entitlements; sourceTree = "<group>"; };
+		C0F1000000000000000000B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		5C7EA1FA38A1728182C949F4 /* PumpStatusStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpStatusStorageTests.swift; sourceTree = "<group>"; };
 		A0E3EA2038BADFBCBC8801A4 /* PumpStatusStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpStatusStorage.swift; sourceTree = "<group>"; };
 		1EE4D8D4BA1BD69A89CA1C13 /* PumpStatusStored+helper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PumpStatusStored+helper.swift"; sourceTree = "<group>"; };
@@ -3505,6 +3521,7 @@
 		38E8754D275556E100975559 /* WatchManager */ = {
 			isa = PBXGroup;
 			children = (
+				C0F1000000000000000000A8 /* ComplicationTransferPolicy.swift */,
 				BDA25EE32D260CCF00035F34 /* AppleWatchManager.swift */,
 				CE94597D29E9E1EE0047C9C6 /* GarminManager.swift */,
 			);
@@ -3536,6 +3553,7 @@
 		38FCF3EE25E9028E0078B0D1 /* TrioTests */ = {
 			isa = PBXGroup;
 			children = (
+				C0F1000000000000000000B2 /* ComplicationTransferPolicyTests.swift */,
 				A1A0EDA730974FFF0028A032 /* GlucoseFormattingTests.swift */,
 				A1EF5D9A309CEF01007282CC /* DurationFormattingTests.swift */,
 				A1A0EDF43097CE470028A032 /* PercentFormattingTests.swift */,
@@ -4413,6 +4431,10 @@
 		BDFF7A9C2D25FA730016C40C /* Trio Watch App Extension */ = {
 			isa = PBXGroup;
 			children = (
+				C0F1000000000000000000A4 /* WatchAppDelegate.swift */,
+				C0F1000000000000000000A6 /* WatchState+Complication.swift */,
+				C0F1000000000000000000B6 /* Info.plist */,
+				C0F1000000000000000000B4 /* TrioWatchApp.entitlements */,
 				DDFF204D2DB2C00B00AB8A96 /* WatchStateSnapshot.swift */,
 				DDFF20492DB29EF500AB8A96 /* WatchLogger.swift */,
 				BDA25EE52D260D5800035F34 /* WatchState.swift */,
@@ -4429,6 +4451,7 @@
 		BDFF7AA02D25FAA80016C40C /* Trio Watch App Tests */ = {
 			isa = PBXGroup;
 			children = (
+				C0F1000000000000000000B0 /* ComplicationSnapshotTests.swift */,
 				BDFF7A8A2D25F97D0016C40C /* Unit Tests.swift */,
 			);
 			path = "Trio Watch App Tests";
@@ -4656,6 +4679,8 @@
 		DD09D6492D2B6253000D82C9 /* Trio Watch Complication */ = {
 			isa = PBXGroup;
 			children = (
+				C0F1000000000000000000A1 /* ComplicationSnapshot.swift */,
+				C0F1000000000000000000B5 /* TrioWatchComplication.entitlements */,
 				DD09D6412D2B553A000D82C9 /* Assets.xcassets */,
 				DD09D6422D2B553A000D82C9 /* Info.plist */,
 				DD09D6432D2B553A000D82C9 /* TrioWatchComplication.swift */,
@@ -5741,6 +5766,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0F1000000000000000000A9 /* ComplicationTransferPolicy.swift in Sources */,
 				3A627606ABC518974CC60B55 /* PumpStatusStorage.swift in Sources */,
 				4AB6E54D1659F6137A70BF74 /* PumpStatusStored+helper.swift in Sources */,
 				BDDB1F2A2BEE371D5C0765DE /* PumpStatusStored+CoreDataProperties.swift in Sources */,
@@ -6512,6 +6538,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0F1000000000000000000B3 /* ComplicationTransferPolicyTests.swift in Sources */,
 				477F2885616B2839D22FF0A4 /* PumpStatusStorageTests.swift in Sources */,
 				3B5CD2C92D4AECD500CE213C /* ProfileCarbsTests.swift in Sources */,
 				3BEDC9932EEB27B600AC6492 /* IobConsecutiveEventsTests.swift in Sources */,
@@ -6657,6 +6684,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0F1000000000000000000A3 /* ComplicationSnapshot.swift in Sources */,
 				DD09D6462D2B553A000D82C9 /* TrioWatchComplication.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -6665,6 +6693,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0F1000000000000000000A2 /* ComplicationSnapshot.swift in Sources */,
+				C0F1000000000000000000A5 /* WatchAppDelegate.swift in Sources */,
+				C0F1000000000000000000A7 /* WatchState+Complication.swift in Sources */,
 				BDA25F222D26D62800035F34 /* BolusInputView.swift in Sources */,
 				BDFF7A882D25F97D0016C40C /* TrioMainWatchView.swift in Sources */,
 				BDA25F202D26D5FE00035F34 /* CarbsInputView.swift in Sources */,
@@ -6700,6 +6731,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0F1000000000000000000B1 /* ComplicationSnapshotTests.swift in Sources */,
 				BDFF7A8B2D25F97D0016C40C /* Unit Tests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -7072,6 +7104,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = "Trio Watch Complication/TrioWatchComplication.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -7109,6 +7142,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = "Trio Watch Complication/TrioWatchComplication.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -7145,6 +7179,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = "Trio Watch App Extension/TrioWatchApp.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -7154,6 +7189,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Trio Watch App Extension/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_DISPLAY_NAME)";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(BUNDLE_IDENTIFIER)";
@@ -7182,6 +7218,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = "Trio Watch App Extension/TrioWatchApp.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -7191,6 +7228,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Trio Watch App Extension/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_DISPLAY_NAME)";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(BUNDLE_IDENTIFIER)";
