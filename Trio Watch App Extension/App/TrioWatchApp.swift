@@ -1,12 +1,17 @@
 import SwiftUI
 import UserNotifications
+import WatchKit
 
 @main struct TrioWatchApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    @WKApplicationDelegateAdaptor private var delegate: TrioWatchAppDelegate
 
     init() {
         _ = WatchState.shared
+        // restores the watch's own link to the sensor
+        _ = WatchCGMHost.shared
         WatchNotificationHandler.shared.configure()
+        WatchActivityMonitor.shared.start()
         WatchLogger.shared.info(.lifecycle, "App launched")
     }
 
@@ -20,7 +25,12 @@ import UserNotifications
                 WatchLogger.shared.info(.lifecycle, "App moved to background")
                 WatchLogger.shared.didEnterBackground()
             } else if newScenePhase == .active {
+                // looking at the watch is a wake that is not the sensor's own
+                WatchCGMHost.shared.recheckAcquisition()
+                // the watch's own reading may have aged out while the app was suspended
+                WatchState.shared.refreshShownReading()
                 WatchState.shared.refreshIfNeeded()
+                WatchActivityMonitor.shared.appDidBecomeActive()
             }
         }
     }
