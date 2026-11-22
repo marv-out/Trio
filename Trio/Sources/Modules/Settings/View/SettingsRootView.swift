@@ -162,7 +162,7 @@ extension Settings {
                         header: HStack(spacing: 4) {
                             Button {
                                 copyVersionInfo(
-                                    "Trio v\(devVersion) (\(buildNumber)) \(buildDetails.branchAndSha)"
+                                    "Trio v\(devVersion) (\(buildNumber)) Boost \(BoostVersion.synced) \(buildDetails.branchAndSha)"
                                 )
                             } label: {
                                 Image(systemName: "doc.on.doc.fill")
@@ -184,6 +184,9 @@ extension Settings {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("Trio v\(devVersion) (\(buildNumber))")
                                             .font(.headline)
+                                        Text(verbatim: "Boost \(BoostVersion.synced)")
+                                            .font(.footnote)
+                                            .foregroundColor(.secondary)
                                         if let expirationDate = buildDetails.calculateExpirationDate() {
                                             let formattedDate = DateFormatter.localizedString(
                                                 from: expirationDate,

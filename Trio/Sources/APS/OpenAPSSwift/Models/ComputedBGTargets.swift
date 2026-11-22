@@ -26,6 +26,13 @@ struct ComputedBGTargets: Codable {
     let units: GlucoseUnits
     let userPreferredUnits: GlucoseUnits
     var targets: [ComputedBGTargetEntry]
+    /// Boost: the scheduled profile target (mg/dL) at decision time, captured BEFORE any
+    /// active temp target overwrites it. AAPS night mode (`isNightModeActiveImpl`) compares
+    /// against the base profile target — not the TT-adjusted one — for both the low-TT gate
+    /// and the final bg-vs-target gate. Transient (excluded from CodingKeys, so it is not
+    /// serialized as part of the targets blob); set in `Targets.lookup` and surfaced onto
+    /// `Profile.boostBaseTargetMgdl` (which IS serialized) by `ProfileGenerator`.
+    var baseProfileTargetMgdl: Decimal? = nil
 }
 
 extension ComputedBGTargets {

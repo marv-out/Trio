@@ -36,6 +36,10 @@ struct Determination: JSON, Equatable {
     /// Remaining COB per 5 min forecast step; display-only,
     /// not part of CodingKeys so the serialized JSON is unchanged.
     var cobProjection: [Decimal]? = nil
+
+    /// What the Boost V1 engine computed that the V6 seam reads; nil outside Boost active mode.
+    /// Not part of CodingKeys, so the serialized JSON is unchanged.
+    var boostV1: BoostV1Telemetry? = nil
 }
 
 struct Predictions: JSON, Equatable {

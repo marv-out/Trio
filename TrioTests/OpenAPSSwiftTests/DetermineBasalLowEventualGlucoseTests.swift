@@ -87,6 +87,8 @@ import Testing
             profile: testProfile,
             determination: testDetermination,
             adjustedSensitivity: adjustedSensitivity ?? testProfile.sens!,
+            // non-Boost path: the primary future_sens leg equals adjustedSensitivity
+            insulinReqSensitivity: adjustedSensitivity ?? testProfile.sens!,
             overrideFactor: overrideFactor
         )
     }

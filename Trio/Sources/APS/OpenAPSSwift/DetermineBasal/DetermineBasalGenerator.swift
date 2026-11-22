@@ -22,7 +22,11 @@ enum DeterminationGenerator {
         glucose: [BloodGlucose],
         microBolusAllowed: Bool,
         trioCustomOrefVariables: TrioCustomOrefVariables,
-        currentTime: Date
+        currentTime: Date,
+        // Boost active mode runs the V1 engine, which needs the SMB record and to know whether it
+        // may persist learned state. Nil for callers that never run Boost (stock path unchanged);
+        // a Boost-active caller without a context gets the preview context.
+        boostV1Context: BoostV1CycleContext? = nil
     ) throws -> Determination? {
         let glucoseStatus = try Self.getGlucoseStatus(glucoseReadings: glucose)
         guard let glucoseStatus = glucoseStatus else { throw DeterminationError.missingInputs }
@@ -36,7 +40,14 @@ enum DeterminationGenerator {
             glucoseStatus: glucoseStatus,
             microBolusAllowed: microBolusAllowed,
             trioCustomOrefVariables: trioCustomOrefVariables,
-            currentTime: currentTime
+            currentTime: currentTime,
+            // Boost pre-meal target: the post-rescue window needs the 45-min glucose low, which only
+            // this entry point holds. Nil outside Boost active mode, and for direct test callers.
+            boostRecentLowBg45Min: preferences.boostMode == .active
+                ? BoostV5Adapter.recentLowBg45Min(glucose, now: currentTime)
+                : nil,
+            boostV1Context: preferences.boostMode == .active ? (boostV1Context ?? .preview) : nil,
+            boostGlucose: glucose
         )
     }
 
@@ -53,7 +64,10 @@ enum DeterminationGenerator {
         glucoseStatus: GlucoseStatus,
         microBolusAllowed: Bool,
         trioCustomOrefVariables: TrioCustomOrefVariables,
-        currentTime: Date
+        currentTime: Date,
+        boostRecentLowBg45Min: Double? = nil,
+        boostV1Context: BoostV1CycleContext? = nil,
+        boostGlucose: [BloodGlucose] = []
     ) throws -> Determination? {
         var autosensData = autosensData
 
@@ -66,6 +80,40 @@ enum DeterminationGenerator {
         )
 
         let currentGlucose: Decimal = glucoseStatus.glucose
+
+        // Boost active: the determination is AAPS's V1 Boost engine (BoostV1Engine), which carries
+        // its own stale-data, low-glucose and SMB logic. Only Trio's check that the running temp
+        // matches the pump record runs first.
+        if preferences.boostMode == .active, let boostV1Context {
+            guard let lastTemp = iobData.first?.lastTemp else { throw DeterminationError.missingIob }
+            if let reason = checkCurrentTempBasalRateSafety(
+                currentTemp: currentTemp,
+                lastTempTarget: lastTemp,
+                currentTime: currentTime
+            ) {
+                return Determination(
+                    id: UUID(), reason: reason, units: nil, insulinReq: nil, eventualBG: nil, sensitivityRatio: nil,
+                    rate: 0, duration: 0, iob: nil, cob: nil, predictions: nil, deliverAt: currentTime, carbsReq: nil,
+                    temp: .absolute, bg: nil, reservoir: nil, isf: nil, timestamp: nil, tdd: nil, current_target: nil,
+                    minDelta: nil, expectedDelta: nil, minGuardBG: nil, minPredBG: nil, threshold: nil, carbRatio: nil,
+                    received: false
+                )
+            }
+            return try BoostV1Determination.determine(
+                profile: profile,
+                preferences: preferences,
+                currentTemp: currentTemp,
+                iobData: iobData,
+                mealData: mealData,
+                orefAutosensRatio: autosensData.ratio,
+                glucoseStatus: glucoseStatus,
+                glucose: boostGlucose,
+                microBolusAllowed: microBolusAllowed,
+                trioCustomOrefVariables: trioCustomOrefVariables,
+                currentTime: currentTime,
+                context: boostV1Context
+            )
+        }
 
         if let errorDetermination = try handleTempBasalCases(
             glucoseStatus: glucoseStatus,
@@ -117,6 +165,10 @@ enum DeterminationGenerator {
             )
         }
 
+        // The oref autosens ratio as it arrived, before Trio's dynamic ISF or a temp target replaces
+        // it below. Boost's static-ISF autosens (AAPS 1c6358ac6c) must read this one.
+        let orefAutosensRatio = autosensData.ratio
+
         let dynamicIsfResult = DynamicISF.calculate(
             profile: profile,
             preferences: preferences,
@@ -149,9 +201,45 @@ enum DeterminationGenerator {
             )
         }
 
+        // Boost active mode: the activity profile % from the classifier snapshot (100 = none),
+        // fresh-guarded (≤30 min). Used for both basal scaling and the ISF 100/profile% scaling.
+        let boostActive = preferences.boostMode == .active
+        let boostProfilePercent: Double = {
+            guard boostActive,
+                  let snap = BoostActivityStore.shared.snapshot,
+                  currentTime.timeIntervalSince(snap.updatedAt) <= 1800 else { return 100 }
+            return snap.profilePercent
+        }()
+
+        // Boost sensitivity (AAPS 3d9d471dbb, 1c6358ac6c). TDD-based ISF and oref autosens are
+        // alternatives: with TDD on, autosens is not applied; with TDD off and "Autosens without TDD"
+        // on, the oref ratio adapts ISF (inside BoostISF), basal, the autosens target shift and
+        // carbohydrate absorption time, as it does in stock oref. Otherwise the ratio is neutral.
+        let boostAutosens: BoostISF.AutosensContext = boostActive ? .make(
+            orefRatio: orefAutosensRatio,
+            isTempTarget: profile.temptargetSet ?? false,
+            targetBg: profile.profileTarget(trioCustomOrefVariables: trioCustomOrefVariables) ?? 120,
+            profile: profile,
+            preferences: preferences
+        ) : .neutral
+        let boostSensitivityRatio = BoostISF.sensitivityRatio(autosens: boostAutosens, preferences: preferences)
+        // The ratio this cycle reports and feeds to the forecast: Boost's own choice in active mode,
+        // stock's otherwise, so the stock path is unchanged.
+        let effectiveSensitivityRatio = boostActive ? boostSensitivityRatio : sensitivityRatio
+
         var basal = profile.currentBasal ?? profile.basalFor(time: currentTime)
         basal *= trioCustomOrefVariables.overrideFactor()
-        if dynamicIsfResult == nil {
+        if boostActive {
+            // Apply the activity profile % (active → lower, inactive → higher), then the selected
+            // sensitivity ratio, which is 1 unless autosens owns sensitivity (AAPS applies the
+            // activity % to the pump basal and determine_basal then multiplies by the ratio).
+            if boostProfilePercent != 100 {
+                basal = (basal * Decimal(boostProfilePercent) / 100).jsRounded(scale: 3)
+            }
+            if boostSensitivityRatio != 1 {
+                basal = TempBasalFunctions.roundBasal(profile: profile, basalRate: basal * boostSensitivityRatio)
+            }
+        } else if dynamicIsfResult == nil {
             basal = computeAdjustedBasal(
                 profile: profile,
                 currentBasalRate: profile.currentBasal ?? profile.basalFor(time: currentTime),
@@ -167,16 +255,42 @@ enum DeterminationGenerator {
             )
         }
 
-        // this is the `sens` variable in JS, it's the adjusted sensitivity
-        let adjustedSensitivity = computeAdjustedSensitivity(
-            sensitivity: profile.sens ?? profile.sensitivityFor(time: currentTime),
-            sensitivityRatio: sensitivityRatio,
-            trioCustomOrefVariables: trioCustomOrefVariables
-        )
+        // this is the `sens` variable in JS, it's the adjusted sensitivity.
+        // Boost active mode swaps in Boost DynISF here (V1, profile-% scaled, autosens only on a
+        // static ISF), so eventualBG/predictions/insulinReq (and V5's baseInsulinReq) are
+        // Boost-flavoured.
+        let baseSensitivity = profile.sens ?? profile.sensitivityFor(time: currentTime)
+        let adjustedSensitivity: Decimal
+        if boostActive {
+            adjustedSensitivity = BoostISF.adjustedSensitivity(
+                profileSens: trioCustomOrefVariables.override(sensitivity: baseSensitivity),
+                currentGlucose: currentGlucose,
+                tdd: trioCustomOrefVariables.tdd(profile: profile),
+                profilePercent: boostProfilePercent,
+                hourOfDay: Calendar.current.component(.hour, from: currentTime),
+                autosens: boostAutosens,
+                profile: profile,
+                preferences: preferences
+            )
+        } else {
+            adjustedSensitivity = computeAdjustedSensitivity(
+                sensitivity: baseSensitivity,
+                sensitivityRatio: sensitivityRatio,
+                trioCustomOrefVariables: trioCustomOrefVariables
+            )
+        }
 
-        let (adjustedGlucoseTargets, threshold) = adjustGlucoseTargets(
+        // Under Boost the autosens target shift follows the selected ratio, as determine_basal's does
+        // in AAPS: the oref ratio when autosens owns sensitivity, neutral otherwise.
+        let targetAutosens = boostActive ? Autosens(
+            ratio: boostSensitivityRatio,
+            newisf: autosensData.newisf,
+            deviationsUnsorted: autosensData.deviationsUnsorted,
+            timestamp: autosensData.timestamp
+        ) : autosensData
+        let (computedTargets, threshold) = adjustGlucoseTargets(
             profile: profile,
-            autosens: autosensData,
+            autosens: targetAutosens,
             trioCustomOrefVariables: trioCustomOrefVariables,
             temptargetSet: profile.temptargetSet ?? false,
             targetGlucose: profile.minBg ?? 100,
@@ -184,6 +298,23 @@ enum DeterminationGenerator {
             maxGlucose: profile.maxBg ?? 180,
             noise: 1
         )
+        var adjustedGlucoseTargets = computedTargets
+
+        // Boost V6: in active mode, fire an anticipatory low target inside the learned pre-meal
+        // window (lower-only), so insulinReq rises before carbs land. Suppressed during exercise.
+        let boostPreMeal = boostPreMealTarget(
+            preferences: preferences,
+            profile: profile,
+            currentTargetGlucose: adjustedGlucoseTargets.targetGlucose,
+            recentLowBg45Min: boostRecentLowBg45Min ?? .infinity,
+            currentTime: currentTime
+        )
+        let boostPreMealNote = boostPreMeal.note
+        if let preTarget = boostPreMeal.target {
+            adjustedGlucoseTargets.targetGlucose = preTarget
+            adjustedGlucoseTargets.minGlucose = min(adjustedGlucoseTargets.minGlucose, preTarget)
+            adjustedGlucoseTargets.maxGlucose = min(adjustedGlucoseTargets.maxGlucose, preTarget)
+        }
 
         let glucoseImpactSeries = buildGlucoseImpactSeries(iobDataSeries: iobData, sensitivity: adjustedSensitivity)
         let glucoseImpactSeriesWithZeroTemp = buildGlucoseImpactSeries(
@@ -241,6 +372,30 @@ enum DeterminationGenerator {
             throw DeterminationError.eventualGlucoseCalculationError(sensitivity: adjustedSensitivity, deviation: deviation)
         }
 
+        // Boost active: predictions recompute ISF per predicted BG (AAPS getIsfByProfile per tick),
+        // not a fixed ISF. sensNormalTarget is BG-independent — compute once, reuse for both the
+        // per-BG closure and the dosing future_sens below.
+        let boostSensNT: Double? = boostActive ? BoostISF.sensNormalTarget(
+            profileSens: trioCustomOrefVariables.override(sensitivity: baseSensitivity),
+            tdd: trioCustomOrefVariables.tdd(profile: profile),
+            profilePercent: boostProfilePercent,
+            autosens: boostAutosens,
+            profile: profile,
+            preferences: preferences
+        ) : nil
+
+        let boostIsfAt: ((Decimal) -> Decimal)? = boostSensNT.map { sensNT in
+            { bg in
+                Decimal(BoostISF.isfByProfile(
+                    bg: (bg as NSDecimalNumber).doubleValue,
+                    sensNormalTarget: sensNT,
+                    profile: profile,
+                    preferences: preferences,
+                    useCap: true
+                ))
+            }
+        }
+
         let forecastResult = ForecastGenerator.generate(
             glucose: currentGlucose,
             glucoseStatus: glucoseStatus,
@@ -255,11 +410,12 @@ enum DeterminationGenerator {
             dynamicIsfResult: dynamicIsfResult,
             targetGlucose: adjustedGlucoseTargets.targetGlucose,
             adjustedSensitivity: adjustedSensitivity,
-            sensitivityRatio: sensitivityRatio,
+            sensitivityRatio: effectiveSensitivityRatio,
             naiveEventualGlucose: naiveEventualGlucose,
             eventualGlucose: eventualGlucose,
             threshold: threshold,
-            currentTime: currentTime
+            currentTime: currentTime,
+            boostIsfAt: boostIsfAt
         )
 
         // used for pre dosing decision sanity later on
@@ -272,7 +428,7 @@ enum DeterminationGenerator {
         // Build isfReason: "Autosens ratio: X, ISF: Y→Z"
         let originalSensitivity = profile.profileSensitivity(at: currentTime, trioCustomOrefVaribales: trioCustomOrefVariables)
         let isfReason =
-            "Autosens ratio: \(sensitivityRatio.jsRounded(scale: 2)), ISF: \(originalSensitivity.jsRounded())→\(adjustedSensitivity.jsRounded())"
+            "Autosens ratio: \(effectiveSensitivityRatio.jsRounded(scale: 2)), ISF: \(originalSensitivity.jsRounded())→\(adjustedSensitivity.jsRounded())"
 
         // Build targetLog: "X" or "X→Y" or "X→Y→Z" if target was adjusted
         let profileTarget = profile.profileTarget(trioCustomOrefVariables: trioCustomOrefVariables) ?? 100
@@ -351,6 +507,9 @@ enum DeterminationGenerator {
         if let carbsReq = dosingInputs.carbsRequired {
             reason += "\(carbsReq.carbs) add'l carbs req w/in \(carbsReq.minutes)m; "
         }
+        if let boostPreMealNote {
+            reason += boostPreMealNote
+        }
 
         var determination = Determination(
             id: UUID(),
@@ -358,7 +517,7 @@ enum DeterminationGenerator {
             units: nil,
             insulinReq: 0,
             eventualBG: Int(forecastResult.eventualGlucose.jsRounded()),
-            sensitivityRatio: sensitivityRatio, // this would only the AS-adjusted one for now
+            sensitivityRatio: effectiveSensitivityRatio, // this would only the AS-adjusted one for now
             rate: nil,
             duration: nil,
             iob: iobData.first?.iob,
@@ -426,6 +585,31 @@ enum DeterminationGenerator {
             return determination
         }
 
+        // Boost active: dosing uses `future_sens` — a BG-context-weighted ISF (AAPS) — for the
+        // insulinReq math (low-temp + SMB), distinct from the prediction ISF. Shadow/off use the
+        // stock adjustedSensitivity. Computed once here from the forecast outputs.
+        let dosingSensitivity: Decimal
+        if boostActive, let sensNT = boostSensNT {
+            let dStatusDelta = (glucoseStatus.delta as NSDecimalNumber).doubleValue
+            let dStatusShort = (glucoseStatus.shortAvgDelta as NSDecimalNumber).doubleValue
+            let dStatusLong = (glucoseStatus.longAvgDelta as NSDecimalNumber).doubleValue
+            dosingSensitivity = BoostISF.futureSens(
+                currentBg: (currentGlucose as NSDecimalNumber).doubleValue,
+                eventualBg: (forecastResult.eventualGlucose as NSDecimalNumber).doubleValue,
+                minPredBg: (forecastResult.minIOBForecastedGlucose as NSDecimalNumber).doubleValue,
+                delta: dStatusDelta,
+                shortAvgDelta: dStatusShort,
+                longAvgDelta: dStatusLong,
+                deltaAccl: DynIsf.deltaAccl(delta: dStatusDelta, shortAvgDelta: dStatusShort),
+                cob: (mealData.mealCOB as NSDecimalNumber).doubleValue,
+                sensNormalTarget: sensNT,
+                profile: profile,
+                preferences: preferences
+            )
+        } else {
+            dosingSensitivity = adjustedSensitivity
+        }
+
         let (shouldSetTempBasalForLowEventualGlucose, lowEventualGlucoseDetermination) = try DosingEngine
             .handleLowEventualGlucose(
                 eventualGlucose: forecastResult.eventualGlucose,
@@ -440,7 +624,8 @@ enum DeterminationGenerator {
                 basal: basal,
                 profile: profile,
                 determination: determination,
-                adjustedSensitivity: adjustedSensitivity,
+                adjustedSensitivity: adjustedSensitivity, // naive + worst-case legs: stock sens
+                insulinReqSensitivity: dosingSensitivity, // primary leg: future_sens (active) / stock
                 overrideFactor: trioCustomOrefVariables.overrideFactor()
             )
         determination = lowEventualGlucoseDetermination
@@ -512,7 +697,7 @@ enum DeterminationGenerator {
             minForecastGlucose: forecastResult.minForecastedGlucose,
             eventualGlucose: forecastResult.eventualGlucose,
             targetGlucose: adjustedGlucoseTargets.targetGlucose,
-            adjustedSensitivity: adjustedSensitivity,
+            adjustedSensitivity: dosingSensitivity, // Boost: future_sens in active; stock ISF otherwise
             maxIob: profile.maxIob,
             currentIob: currentIob,
             determination: determination
@@ -552,6 +737,45 @@ enum DeterminationGenerator {
             currentTemp: currentTemp,
             determination: determination
         )
+    }
+
+    /// The V6 anticipatory pre-meal target for this cycle (AAPS 7b), lower-only: the target to use
+    /// when it applies and is below `currentTargetGlucose`, and a reason note when it was suppressed.
+    /// Active mode only; suppressed during exercise, inside the night window, while asleep, under a
+    /// temp target and in the post-rescue window (AAPS a33752c9aa #8).
+    static func boostPreMealTarget(
+        preferences: Preferences,
+        profile: Profile,
+        currentTargetGlucose: Decimal,
+        recentLowBg45Min: Double,
+        currentTime: Date
+    ) -> (target: Decimal?, note: String?) {
+        guard preferences.boostMode == .active,
+              preferences.boostV6PreMealEnabled,
+              !BoostActivityStore.shared.flags(now: currentTime).exerciseActive
+        else { return (nil, nil) }
+        let offsetMs = Double(TimeZone.current.secondsFromGMT(for: currentTime)) * 1000.0
+        let nowMin = Calendar.current.component(.hour, from: currentTime) * 60
+            + Calendar.current.component(.minute, from: currentTime)
+        let leadMax = Int((preferences.boostV6PreMealLeadMin as NSDecimalNumber).doubleValue)
+        let nightWindow = BoostV5Adapter.nightWindowMinutes(preferences)
+        let history = BoostMealTimeStore.shared.historyWithoutNightEvents(
+            nightStartMin: nightWindow.start, nightEndMin: nightWindow.end, localOffsetMs: offsetMs
+        )
+        guard MealTimeLearner.preMealWindow(history, nowMin: nowMin, localOffsetMs: offsetMs, leadMaxMin: leadMax) != nil
+        else { return (nil, nil) }
+        if let why = MealTimeLearner.preMealTargetBlock(
+            inNightWindow: BoostGate.inNightWindow(
+                nowMinuteOfDay: nowMin, startMinute: nightWindow.start, endMinute: nightWindow.end
+            ),
+            sleepState: BoostActivityStore.shared.sleep(now: currentTime).state,
+            tempTargetActive: profile.temptargetSet ?? false,
+            postRescueWindow: recentLowBg45Min < SafetyGateConstants.postRescueLowThresholdMgdl
+        ) {
+            return (nil, "V6 pre-meal SUPPRESSED (\(why)); ")
+        }
+        let preTarget = preferences.boostV6PreMealTargetMgdl
+        return (preTarget < currentTargetGlucose ? preTarget : nil, nil)
     }
 
     static func checkDeterminationInputs(

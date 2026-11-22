@@ -57,6 +57,11 @@ struct TrioSettings: JSON, Equatable, Encodable {
     var maxProtein: Decimal = 250
     var confirmBolusFaster: Bool = false
     var showForecastWatch: Bool = false
+    /// The watch’s own urgent low alarm sounds through Silent Mode.
+    var useCriticalAlertsWatch: Bool = false
+    var watchActivityEnabled: Bool = false
+    /// Runs a workout session on the watch for minute-by-minute heart rate and steps
+    var watchActivityPreciseMode: Bool = false
     var overrideFactor: Decimal = 0.8
     var fattyMeals: Bool = false
     var fattyMealFactor: Decimal = 0.7
@@ -318,6 +323,18 @@ extension TrioSettings: Decodable {
 
         if let showForecastWatch = try? container.decode(Bool.self, forKey: .showForecastWatch) {
             settings.showForecastWatch = showForecastWatch
+        }
+
+        if let useCriticalAlertsWatch = try? container.decode(Bool.self, forKey: .useCriticalAlertsWatch) {
+            settings.useCriticalAlertsWatch = useCriticalAlertsWatch
+        }
+
+        if let watchActivityEnabled = try? container.decode(Bool.self, forKey: .watchActivityEnabled) {
+            settings.watchActivityEnabled = watchActivityEnabled
+        }
+
+        if let watchActivityPreciseMode = try? container.decode(Bool.self, forKey: .watchActivityPreciseMode) {
+            settings.watchActivityPreciseMode = watchActivityPreciseMode
         }
 
         if let displayPresets = try? container.decode(Bool.self, forKey: .displayPresets) {

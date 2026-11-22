@@ -109,7 +109,14 @@ final class BaseDeviceDataManager: DeviceDataManager, Injectable {
                 )
                 modifiedPreferences
                     .bolusIncrement = bolusIncrement > 0 ? bolusIncrement : 0.1
-                storage.save(modifiedPreferences, as: OpenAPS.Settings.preferences)
+                // Write only when the value actually changes. Persisting the whole preferences file
+                // on every pump assignment rewrites every other setting from this instance's
+                // in-memory copy, which silently discards anything written to the file since it was
+                // loaded. That is also what made the mmol settings-parsing test flaky: the manager
+                // clobbered the fixture from an older snapshot.
+                if modifiedPreferences.bolusIncrement != settingsManager.preferences.bolusIncrement {
+                    storage.save(modifiedPreferences, as: OpenAPS.Settings.preferences)
+                }
 
                 // Ensure the pump manager's delivery limits always reflect the user's
                 // current settings. Without this, the active pump manager instance
@@ -176,10 +183,13 @@ final class BaseDeviceDataManager: DeviceDataManager, Injectable {
                 pumpExpiresAtDate.send(nil)
                 pumpActivatedAtDate.send(nil)
                 pumpName.send("")
-                // Reset bolusIncrement setting to default value, which is 0.1 U
+                // Reset bolusIncrement setting to default value, which is 0.1 U. As above, only
+                // when it actually differs, so clearing a pump does not rewrite the whole file.
                 var modifiedPreferences = settingsManager.preferences
                 modifiedPreferences.bolusIncrement = 0.1
-                storage.save(modifiedPreferences, as: OpenAPS.Settings.preferences)
+                if modifiedPreferences.bolusIncrement != settingsManager.preferences.bolusIncrement {
+                    storage.save(modifiedPreferences, as: OpenAPS.Settings.preferences)
+                }
                 // Remove OpenAPS_Battery entries
                 Task {
                     let context = CoreDataStack.shared.newTaskContext()

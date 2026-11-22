@@ -165,6 +165,13 @@ enum ProfileGenerator {
             .bgTargetsLookup(targets: bgTargets, tempTargets: tempTargets, profile: profile, now: clock)
         profile.minBg = range.minBg?.rounded()
         profile.maxBg = range.maxBg?.rounded()
+        // Boost: persist the pre-temp-target base profile target for the night-mode gates.
+        // Only when Boost is running: the gates never read it with Boost off, and leaving it nil
+        // keeps the serialised profile byte-identical to stock, so upstream's golden parity
+        // scenarios (which all run stock preferences) still detect real algorithm drift here.
+        if preferences.boostMode != .off {
+            profile.boostBaseTargetMgdl = updatedTargets.baseProfileTargetMgdl?.rounded()
+        }
         // Note: we're using updatedTargets here because in Javascript the bgTargetsLookup
         // function mutates the input, so we want the mutated version in the
         // profile and we need to round the properties

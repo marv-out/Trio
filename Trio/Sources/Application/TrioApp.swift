@@ -76,6 +76,7 @@ extension Notification.Name {
         _ = resolver.resolve(WatchManager.self)!
         _ = resolver.resolve(ContactImageManager.self)!
         _ = resolver.resolve(HealthKitManager.self)!
+        _ = resolver.resolve(BoostActivityMonitor.self)!
         _ = resolver.resolve(GarminManager.self)!
         _ = resolver.resolve(BluetoothStateManager.self)!
         _ = resolver.resolve(PluginManager.self)!
@@ -174,7 +175,7 @@ extension Notification.Name {
             .joined(separator: ", ")
         info(
             .lifecycle,
-            "Trio started: v\(devVersion) (\(Bundle.main.buildVersionNumber ?? "")) \(BuildDetails.shared.branchAndSha); \(submodules)"
+            "Trio started: v\(devVersion) (\(Bundle.main.buildVersionNumber ?? "")) Boost \(BoostVersion.synced) \(BuildDetails.shared.branchAndSha); \(submodules)"
         )
         // Fix bug in iOS 18 related to the translucent tab bar
         configureTabBarAppearance()

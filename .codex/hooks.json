@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/Users/timstreet/StudioProjects/Trio/.codex/hooks/ukf/no-fresh-ukf.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash '/Users/timstreet/StudioProjects/Trio/.codex/hooks/ukf/parity-tripwire.sh'"
+          }
+        ]
+      }
+    ]
+  }
+}

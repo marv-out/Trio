@@ -23,15 +23,12 @@ enum DosingEngine {
         trioCustomOrefVariables: TrioCustomOrefVariables,
         clock: Date
     ) throws -> Bool {
-        if trioCustomOrefVariables.smbIsOff {
-            return false
-        }
-
-        if try isSmbScheduledOff(trioCustomOrefVariables: trioCustomOrefVariables, clock: clock) {
-            return false
-        }
-
-        if !profile.allowSMBWithHighTemptarget, profile.temptargetSet == true, adjustedTargetGlucose > 100 {
+        if try smbHardDisabledByUserLevers(
+            profile: profile,
+            adjustedTargetGlucose: adjustedTargetGlucose,
+            trioCustomOrefVariables: trioCustomOrefVariables,
+            clock: clock
+        ) {
             return false
         }
 
@@ -82,6 +79,33 @@ enum DosingEngine {
             return true
         } else if startHour == endHour, currentHour == startHour {
             // one hour of scheduled off SMB
+            return true
+        }
+
+        return false
+    }
+
+    /// The explicit, user-facing "back off — no SMB" levers, extracted from `isProfileSmbEnabled`:
+    /// the master SMB-off flag, the scheduled SMB-off window, and a high temp target when the user
+    /// has not enabled "Allow SMB with high temp target". Kept separate from the positive
+    /// `enableSMB_*` conditions so the Boost active SMB override can honour these levers (e.g. a
+    /// user raising a temp target for exercise, or a scheduled off-window) without inheriting the
+    /// enable conditions — Boost still doses for detected meals where stock would not.
+    static func smbHardDisabledByUserLevers(
+        profile: Profile,
+        adjustedTargetGlucose: Decimal,
+        trioCustomOrefVariables: TrioCustomOrefVariables,
+        clock: Date
+    ) throws -> Bool {
+        if trioCustomOrefVariables.smbIsOff {
+            return true
+        }
+
+        if try isSmbScheduledOff(trioCustomOrefVariables: trioCustomOrefVariables, clock: clock) {
+            return true
+        }
+
+        if !profile.allowSMBWithHighTemptarget, profile.temptargetSet == true, adjustedTargetGlucose > 100 {
             return true
         }
 
@@ -378,6 +402,10 @@ enum DosingEngine {
         profile: Profile,
         determination: Determination,
         adjustedSensitivity: Decimal,
+        // Sensitivity for the primary low-temp insulinReq leg only. In Boost active this is
+        // future_sens (AAPS uses future_sens here but stock `sens` for the naive + worst-case legs);
+        // otherwise it equals adjustedSensitivity.
+        insulinReqSensitivity: Decimal,
         overrideFactor: Decimal
     ) throws -> (shouldSetTempBasal: Bool, determination: Determination) {
         guard eventualGlucose < minGlucose else {
@@ -438,7 +466,8 @@ enum DosingEngine {
         }
 
         // calculate 30m low-temp required to get projected glucose up to target
-        var insulinRequired = 2 * min(0, (eventualGlucose - targetGlucose) / adjustedSensitivity)
+        // (AAPS: this leg uses future_sens; naive + worst-case below use stock sens)
+        var insulinRequired = 2 * min(0, (eventualGlucose - targetGlucose) / insulinReqSensitivity)
         insulinRequired = insulinRequired.jsRounded(scale: 2)
 
         let naiveInsulinRequired = min(0, (naiveEventualGlucose - targetGlucose) / adjustedSensitivity).jsRounded(scale: 2)

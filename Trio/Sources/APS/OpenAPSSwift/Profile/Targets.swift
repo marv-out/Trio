@@ -33,6 +33,10 @@ struct Targets {
         }
         bgComputedTargets[targetIdx].high = bgComputedTargets[targetIdx].low
 
+        // Boost: snapshot the scheduled profile target BEFORE temp targets overwrite it,
+        // so the night-mode gates can compare against the base target like AAPS does.
+        let baseProfileTargetMgdl = bgComputedTargets[targetIdx].low
+
         // Handle temp targets
         let sortedTempTargets = tempTargets.sorted { $0.createdAt > $1.createdAt }
 
@@ -59,7 +63,12 @@ struct Targets {
         }
 
         return (
-            ComputedBGTargets(units: targets.units, userPreferredUnits: targets.userPreferredUnits, targets: bgComputedTargets),
+            ComputedBGTargets(
+                units: targets.units,
+                userPreferredUnits: targets.userPreferredUnits,
+                targets: bgComputedTargets,
+                baseProfileTargetMgdl: baseProfileTargetMgdl
+            ),
             targetIdx
         )
     }

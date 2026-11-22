@@ -76,3 +76,56 @@ import Testing
         #expect(highlight.highlightedSetting == nil)
     }
 }
+
+/// A Boost settings slider writes through the state model to the stored preferences, so moving a
+/// slider changes the setting itself. Whether the screen redraws is a separate matter: the advanced
+/// screen is its own view observing the state model.
+@Suite("Boost settings write-through", .serialized) struct BoostSettingsWriteThroughTests {
+    @Test("A slider write reaches the stored preferences") func sliderWriteReachesPreferences() {
+        let resolver = TrioApp().resolver
+        let settingsManager = resolver.resolve(SettingsManager.self)!
+        let original = settingsManager.preferences.boostV5Sensitivity
+        defer { settingsManager.preferences.boostV5Sensitivity = original }
+
+        let state = Settings.StateModel()
+        state.resolver = resolver
+        let moved: Decimal = original == 1.15 ? 0.85 : 1.15
+        state.boostV5Sensitivity = moved
+
+        #expect(settingsManager.preferences.boostV5Sensitivity == moved)
+    }
+}
+
+/// Votes from a run whose raise guard was overridden are kept apart from the scheduled ledger, so a
+/// scheduled run cannot complete a two-run confirmation with one; and only one run holds the lock.
+@Suite("Boost re-derivation ledgers", .serialized) struct BoostRedriveLedgerTests {
+    @Test("An overridden run's vote is invisible to a scheduled run") func overriddenVotesAreSeparate() {
+        BoostRedriveStore.reset()
+        defer { BoostRedriveStore.reset() }
+        BoostRedriveStore.setPending(.committedCapU, 0.8, overridden: true)
+        BoostRedriveStore.setPendingFlag("aec.prev", true, overridden: true)
+        #expect(BoostRedriveStore.pending(.committedCapU) == nil)
+        #expect(BoostRedriveStore.pendingFlag("aec.prev") == nil)
+        #expect(BoostRedriveStore.pending(.committedCapU, overridden: true) == 0.8)
+    }
+
+    @Test("A run without the override clears the overridden votes") func ordinaryRunClearsOverriddenVotes() {
+        BoostRedriveStore.reset()
+        defer { BoostRedriveStore.reset() }
+        BoostRedriveStore.setPending(.committedCapU, 0.8)
+        BoostRedriveStore.setPending(.committedCapU, 0.8, overridden: true)
+        #expect(BoostRedriveStore.voteLedger(overrideLiftsGuard: true))
+        #expect(BoostRedriveStore.pending(.committedCapU, overridden: true) == 0.8)
+        #expect(!BoostRedriveStore.voteLedger(overrideLiftsGuard: false))
+        #expect(BoostRedriveStore.pending(.committedCapU, overridden: true) == nil)
+        #expect(BoostRedriveStore.pending(.committedCapU) == 0.8)
+    }
+
+    @Test("Only one run at a time") func oneRunAtATime() {
+        #expect(BoostRedriveStore.tryBeginRun())
+        #expect(!BoostRedriveStore.tryBeginRun())
+        BoostRedriveStore.endRun()
+        #expect(BoostRedriveStore.tryBeginRun())
+        BoostRedriveStore.endRun()
+    }
+}

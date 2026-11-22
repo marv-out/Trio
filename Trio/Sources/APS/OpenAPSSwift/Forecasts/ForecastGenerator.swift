@@ -20,7 +20,8 @@ enum ForecastGenerator {
         naiveEventualGlucose _: Decimal,
         eventualGlucose: Decimal,
         threshold: Decimal,
-        currentTime: Date
+        currentTime: Date,
+        boostIsfAt: ((Decimal) -> Decimal)? = nil
     ) -> ForecastResult {
         let profileCarbRatio = profile.carbRatio ?? profile.carbRatioFor(time: currentTime)
         let adjustedCarbRatio: Decimal
@@ -71,7 +72,8 @@ enum ForecastGenerator {
             dynamicIsfState: preferences.dynamicIsfState(profile: profile, trioCustomOrefVariables: trioCustomOrefVariables),
             insulinFactor: dynamicIsfResult?.insulinFactor,
             tdd: trioCustomOrefVariables.tdd(profile: profile),
-            adjustmentFactorLogrithmic: profile.adjustmentFactor
+            adjustmentFactorLogrithmic: profile.adjustmentFactor,
+            boostIsfAt: boostIsfAt
         )
 
         let cobResult = forecastCOB(
@@ -94,7 +96,8 @@ enum ForecastGenerator {
             dynamicIsfState: preferences.dynamicIsfState(profile: profile, trioCustomOrefVariables: trioCustomOrefVariables),
             insulinFactor: dynamicIsfResult?.insulinFactor,
             tdd: trioCustomOrefVariables.tdd(profile: profile),
-            adjustmentFactorLogrithmic: profile.adjustmentFactor
+            adjustmentFactorLogrithmic: profile.adjustmentFactor,
+            boostIsfAt: boostIsfAt
         )
 
         let ztResult = forecastZT(
@@ -105,8 +108,21 @@ enum ForecastGenerator {
             dynamicIsfState: preferences.dynamicIsfState(profile: profile, trioCustomOrefVariables: trioCustomOrefVariables),
             insulinFactor: dynamicIsfResult?.insulinFactor,
             tdd: trioCustomOrefVariables.tdd(profile: profile),
-            adjustmentFactorLogrithmic: profile.adjustmentFactor
+            adjustmentFactorLogrithmic: profile.adjustmentFactor,
+            boostIsfAt: boostIsfAt
         )
+
+        // Boost active derives the min-prediction gate from the insulin peak (AAPS ((peak+30)/60)·12);
+        // off/shadow keep the stock 18 (shadow-safe).
+        let insulinPeak5m: Int
+        if preferences.boostMode == .active {
+            let peak = preferences.useCustomPeakTime
+                ? (profile.insulinPeakTime as NSDecimalNumber).doubleValue
+                : (profile.curve == .ultraRapid ? 55.0 : 75.0)
+            insulinPeak5m = Int(((peak + 30.0) / 60.0) * 12.0)
+        } else {
+            insulinPeak5m = 18
+        }
 
         let initialForecasts = calculateMinMaxForecastedGlucose(
             currentGlucose: glucose,
@@ -116,7 +132,8 @@ enum ForecastGenerator {
             ztForecast: ztResult,
             carbImpactDuration: carbImpactParams.carbImpactDuration,
             remainingCarbImpactPeak: carbImpactParams.remainingCarbImpactPeak,
-            uamEnabled: profile.enableUAM
+            uamEnabled: profile.enableUAM,
+            insulinPeak5m: insulinPeak5m
         )
 
         let blendedForecasts = Self.blendForecasts(
@@ -183,7 +200,8 @@ enum ForecastGenerator {
         ztForecast: IndividualForecast,
         carbImpactDuration: Decimal,
         remainingCarbImpactPeak: Decimal,
-        uamEnabled: Bool
+        uamEnabled: Bool,
+        insulinPeak5m: Int = 18
     ) -> AllForecasts {
         // FIXME: we need to make sure that these will all be the same length
         // but since they're running their loops on the same data they should be
@@ -200,7 +218,8 @@ enum ForecastGenerator {
         var minCobForecastGlucose = Decimal(999)
         var minUamForecastGlucose = Decimal(999)
 
-        let insulinPeak5m = 18
+        // insulinPeak5m gates the minIOB/minCOB/minUAM accumulation window (param; stock default 18,
+        // Boost active passes the AAPS-derived ((peak+30)/60)·12 from `generate`).
 
         // start at 1 because the first entry is currentGlucose
         for index in 1 ..< minCount {

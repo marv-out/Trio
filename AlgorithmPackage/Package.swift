@@ -7,8 +7,19 @@ import PackageDescription
 // This is a "shadow" package: it compiles the *existing* files in
 // place rather than owning its own copy, so there is exactly one
 // copy of every source file and the Xcode app target keeps
-// compiling the same ones. `Sources` and `OpenAPSSwiftTests` are
-// symlinks back to Trio/Sources and TrioTests/OpenAPSSwiftTests.
+// compiling the same ones. `Sources`, `BoostV5Core` and
+// `OpenAPSSwiftTests` are symlinks back to Trio/Sources,
+// BoostPort/BoostV5Core/Sources/BoostV5Core and
+// TrioTests/OpenAPSSwiftTests.
+//
+// BoostV5Core is compiled INTO this target rather than depended on
+// as a library, because that is how the Xcode app target builds it:
+// the pbxproj lists the BoostPort source files in the app target, so
+// the Boost files under APS/OpenAPSSwift/Boost reach BoostMode,
+// DynIsf and SafetyGates without an `import`. Making the package a
+// two-module build would need imports the app target must not have.
+// The target path is therefore the package root, with every source
+// listed relative to it.
 //
 // This lives in a subdirectory, not the repo root, because Xcode
 // prefers a root Package.swift over Trio.xcworkspace when opening
@@ -37,7 +48,7 @@ let algorithmModels = [
     "TempBasal",
     "TempTarget",
     "TrioCustomOrefVariables"
-].map { "Models/\($0).swift" }
+].map { "Sources/Models/\($0).swift" }
 
 let algorithmHelpers = [
     "ConvenienceExtensions",
@@ -48,7 +59,7 @@ let algorithmHelpers = [
     "String+Extensions",
     "TherapySettingsUtil",
     "TimeInterval+Convenience"
-].map { "Helpers/\($0).swift" }
+].map { "Sources/Helpers/\($0).swift" }
 
 let package = Package(
     name: "TrioAlgorithm",
@@ -60,10 +71,12 @@ let package = Package(
     targets: [
         .target(
             name: "Trio",
-            path: "Sources",
+            path: ".",
+            exclude: ["OpenAPSSwiftTests", "Package.swift"],
             sources: [
-                "APS/OpenAPSSwift",
-                "APS/Extensions/DecimalExtensions.swift"
+                "Sources/APS/OpenAPSSwift",
+                "Sources/APS/Extensions/DecimalExtensions.swift",
+                "BoostV5Core"
             ] + algorithmModels + algorithmHelpers,
             swiftSettings: [.define("TRIO_ALGORITHM_PACKAGE")]
         ),

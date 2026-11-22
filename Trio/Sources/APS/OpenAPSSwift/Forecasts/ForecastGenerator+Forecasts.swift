@@ -9,7 +9,8 @@ extension ForecastGenerator {
         dynamicIsfState: DynamicIsfState,
         insulinFactor: Decimal?,
         tdd: Decimal,
-        adjustmentFactorLogrithmic: Decimal
+        adjustmentFactorLogrithmic: Decimal,
+        boostIsfAt: ((Decimal) -> Decimal)? = nil
     ) -> IndividualForecast {
         var result = [startingGlucose]
         var rawResult = [startingGlucose]
@@ -18,7 +19,11 @@ extension ForecastGenerator {
             let forecastedDeviation = carbImpact * (1 - min(1, Decimal(result.count) / (60 / 5)))
             let lastForecast = result.last!
             let next: Decimal
-            if let insulinFactor = insulinFactor, dynamicIsfState == .logrithmic {
+            if let boostIsfAt = boostIsfAt {
+                // Boost: per-BG dynamic ISF (AAPS getIsfByProfile) — impact = -activity·ISF(predBG)·5.
+                let impact = (-iob.activity * boostIsfAt(max(lastForecast, 39)) * 5).jsRounded(scale: 2)
+                next = lastForecast + impact + forecastedDeviation
+            } else if let insulinFactor = insulinFactor, dynamicIsfState == .logrithmic {
                 let adjustedGlucoseImpact = adjustedGlucoseImpactForLogrithmicDynamicIsf(
                     lastForecast: lastForecast,
                     insulinFactor: insulinFactor,
@@ -127,7 +132,8 @@ extension ForecastGenerator {
         dynamicIsfState: DynamicIsfState,
         insulinFactor: Decimal?,
         tdd: Decimal,
-        adjustmentFactorLogrithmic: Decimal
+        adjustmentFactorLogrithmic: Decimal,
+        boostIsfAt: ((Decimal) -> Decimal)? = nil
     ) -> IndividualForecast {
         var result = [startingGlucose]
         var rawResult = [startingGlucose]
@@ -167,7 +173,10 @@ extension ForecastGenerator {
 
             let lastForecast = result.last!
             let next: Decimal
-            if let insulinFactor = insulinFactor, dynamicIsfState == .logrithmic {
+            if let boostIsfAt = boostIsfAt {
+                let impact = (-iob.activity * boostIsfAt(max(lastForecast, 39)) * 5).jsRounded(scale: 2)
+                next = lastForecast + impact + min(0, forecastedDeviation) + forecastedUnannouncedCarbImpact
+            } else if let insulinFactor = insulinFactor, dynamicIsfState == .logrithmic {
                 let adjustedGlucoseImpact = adjustedGlucoseImpactForLogrithmicDynamicIsf(
                     lastForecast: lastForecast,
                     insulinFactor: insulinFactor,
@@ -204,7 +213,8 @@ extension ForecastGenerator {
         dynamicIsfState: DynamicIsfState,
         insulinFactor: Decimal?,
         tdd: Decimal,
-        adjustmentFactorLogrithmic: Decimal
+        adjustmentFactorLogrithmic: Decimal,
+        boostIsfAt: ((Decimal) -> Decimal)? = nil
     ) -> IndividualForecast {
         var result = [startingGlucose]
         var rawResult = [startingGlucose]
@@ -214,7 +224,10 @@ extension ForecastGenerator {
         for (glucoseImpact, iob) in zip(glucoseImpactSeriesWithZeroTemp, iobData) {
             let lastForecast = result.last!
             let next: Decimal
-            if let insulinFactor = insulinFactor, dynamicIsfState == .logrithmic {
+            if let boostIsfAt = boostIsfAt {
+                let impact = (-iob.iobWithZeroTemp.activity * boostIsfAt(max(lastForecast, 39)) * 5).jsRounded(scale: 2)
+                next = lastForecast + impact
+            } else if let insulinFactor = insulinFactor, dynamicIsfState == .logrithmic {
                 let adjustedGlucoseImpact = adjustedGlucoseImpactForLogrithmicDynamicIsf(
                     lastForecast: lastForecast,
                     insulinFactor: insulinFactor,
